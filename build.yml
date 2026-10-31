@@ -1,0 +1,1579 @@
+name: Build Lux Monitor APK
+# Single-file setup: this workflow writes the whole Android project, builds it, and publishes the APK.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Generate project files
+        run: |
+          mkdir proj
+          cd proj
+          mkdir -p app
+          mkdir -p app/src/main
+          mkdir -p app/src/main/java/com/lux/monitor
+          mkdir -p app/src/main/res/drawable
+          mkdir -p app/src/main/res/layout
+          mkdir -p app/src/main/res/mipmap-anydpi-v26
+          mkdir -p app/src/main/res/values
+          mkdir -p app/src/main/res/xml
+          cat > app/build.gradle.kts <<'EOF'
+          plugins{id("com.android.application");id("org.jetbrains.kotlin.android")}
+          android{namespace="com.lux.monitor";compileSdk=34
+          defaultConfig{applicationId="com.lux.monitor";minSdk=26;targetSdk=34;versionCode=1;versionName="1.0"}
+          buildFeatures{compose=true}
+          composeOptions{kotlinCompilerExtensionVersion="1.5.14"}
+          compileOptions{sourceCompatibility=JavaVersion.VERSION_17;targetCompatibility=JavaVersion.VERSION_17}
+          kotlinOptions{jvmTarget="17"}
+          signingConfigs{create("fixed"){storeFile=file("fixed.keystore");storePassword="android";keyAlias="luxmonitor";keyPassword="android"}}
+          buildTypes{getByName("debug"){signingConfig=signingConfigs.getByName("fixed")}}}
+          dependencies{implementation(platform("androidx.compose:compose-bom:2024.06.00"))
+          implementation("androidx.compose.material3:material3");implementation("androidx.compose.ui:ui")
+          implementation("androidx.activity:activity-compose:1.9.0")
+          implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.2")}
+          EOF
+          cat > app/fixed.keystore.b64 <<'EOF'
+          MIIKLAIBAzCCCdYGCSqGSIb3DQEHAaCCCccEggnDMIIJvzCCBaYGCSqGSIb3DQEHAaCCBZcEggWTMIIFjzCCBYsGCyqGSIb3DQEMCgECoIIFMDCCBSwwZgYJKoZIhvcNAQUNMFkwOAYJKoZIhvcNAQUMMCsEFG5KD1a/AuUHyGh8flafolanmMiaAgInEAIBIDAMBggqhkiG9w0CCQUAMB0GCWCGSAFlAwQBKgQQCjg99dKtzWfFyyDKFVIDrQSCBMCy7g/9WHFgBtsjar5tjP+QFkVCP0y1RzpHq+jCdyoM6DQBXwc4F+WJAJncynTCDTphsf2RFrMjmW1CQw+UWZnCqAPnT2YxqdO6p2rEYh3CiIgspksv4OKTK+YiIPKDy/KSCr+N+s995hEoZ43Mg6HccVY9b3dLUyOMz74xBGEZGh0Mnhj6NUyLMMqm/mQtrosJ4IKOiL2BksrOx74aI8YQRGuqbKRRipFFvRW2G3it3VIsEhzh/8Pz2YKsY7TI9qxZX7YfhoEo2A/YLWIk/wN7PYsbRTQyA8M3irCY5lfw8sHdVucMFP8LeVJZZPoVRmg/bUcvODo1I8iU7fMwZgY2uQxK9Svfc7q3Oi4gNYfsN0UoW7id1DFbChrVUruEgkVdVFXiFhvlbwNWeoXFH5LOSvy8lZGGGkpkTi61zO9NOG/znGEmmSIdM/Ts8ovBdc9xHjEcM4xSR1VlaFBRVzec9bnSkG3cUuAye2Fw4WLRWnlJ+TqNmDm7fPfJ9PPMI5Q5ux3NNP3Noi1ISbg9TQcVN+zTNefc128C7ErIo1AO/Sbct3KBPsDFEanghgpSPCV8+GJDxEWmyRXNl9hZeMdoo4D7zZ5uOBmcUPpEdbeE29jcXW2KbIdbA3uu3w6lbRKFzYkTcr3uHdGSodXJ/iSoM9VcNoS64Ikm8/Z/O4aHUMn5xZ70kz88CM/P+330MjW3YdvgINaEqKmAPGw5KbmCg/krTOVnlRSFUau8AB+TheYCtEn8Aq0PQAO7cvXwlrc4fNCZt5FdyA91pmid0ykGOTKPdTtecNtnupyr/U7YODTnA4Fl4DhLwQr8PJEffXWQvyvv1RIrJnsnu5O+QLUYyfWOQ4jHjlML4L62idr8lN9gvT01vT398iFDer2jfxgXq6JXf3KR7C34olrcsd3GCtbs5sxZ7KOS1Rg2t1ovMvc3BUS5mSLCbyQJbZg1pgOzDCYABBWuKgr2mV4QcCmdBRekhwx1no59yTLQWyQUoVwq55Xle+EzSqCDHjddOn+zJlFxpajzQcXzp9VP1IfC/daoBHTy+PhSV0P8xMJ8hNGsChF6tJmdeUbm388RA2sEnQpdkFYzP9dCm/9H8oH8Odj0GKDwJH02iclwhX/nS89ddBpJILYWw8Hz55DiQSSQ2kvoZ3hmfegS1s1Pj59Sc3i2lVIqEZSEmPHqoR2TD2WgT64aPF4rs5DYhYg6I5aIQEXJI57lutxLc3tf8bNNMn6TrHP43ZP/lPdP6reoV3KGKI7A/Ue6BnsQILdq49/84Qf6H+oxFBnwK/uPzBNpq1WZJsNdJqt+5MRsFDjwQfU2bZ9bS+apt7IJk3nc+LOohA5CPXZE/yWcniC+JacYatZBq1wX2Yj2Y9ljo/ERrcz2by1Gc/lrjbc0Wx0JLwWGBdv1e2pLJll9m9tdzfArJ+JW9TCelk/34inmiwDHoa4a4pm/pi0WZTO84wDQ5KetsIZyWfkylDtN0+H8oFZ3KSnN9M7jS8VlkDQlopaVgTt6xmNJ9X25iR5zL20kRzLfeYH3IxwlK6s0xhbqxH/muXvjWUtDNKrOhXXJXcQkinH7pqkKhaDqp0RTRKw5hQTm7IK2nsz7x8eapdCvjC4gMUgwIwYJKoZIhvcNAQkUMRYeFABsAHUAeABtAG8AbgBpAHQAbwByMCEGCSqGSIb3DQEJFTEUBBJUaW1lIDE3OTMzNDUxMDc1MjgwggQRBgkqhkiG9w0BBwagggQCMIID/gIBADCCA/cGCSqGSIb3DQEHATBmBgkqhkiG9w0BBQ0wWTA4BgkqhkiG9w0BBQwwKwQUr5C45OSwHmlU1wXArjpeW2zm5kwCAicQAgEgMAwGCCqGSIb3DQIJBQAwHQYJYIZIAWUDBAEqBBDGJ50TP3S/Z62YewJLS/SZgIIDgGRkIYgyXgTlAMYrZDzPufqGWNwkjn8jVQAKzSmSb73Dx4lAOQUD0faqgVlEt/7uR2R0aRIED4NkmdTPJ2SOP6j1ZCiF/iU0twxL5PLq7xnmIxB3BNqwc7J1p1p0aPJFzSlMgyjADdIAVRlBov3y33n4gxlWPqr+GRLa94RN2M2g7M02fSXON3cNLypG14lT0umIPRpRi1c7qL2g2ze0YLoJMQzBDK0QQplLHiRsmfS0JfPuCeUA51G/C+9vbH0uXZY2so/kh/I6hZarytQaefXLLkuCGNW3OnZIUqMfH5ni7uHG70U94JH1Xw6suiWLQoNNeJJPBsNBdQkUwkrurAXxrOyMlUMKSrOtukiDsjqZZprsIu6f18gohoN5GWp9gBsmlD/33c6X2BjklRWN/7iTL93Em9omWJ1whcdWtYq0NgCdqRPj+rQdvANwqes5XSYl2HEt0L/HaE/H9yVXK2dkPL2QNNMQbZYI5MLumyFKjlAP1H4vRLIrYBej6D2kETIA4HrCXQdzDZoofUz3svFWbl8FMpsRaAHSQRKgfM3HIQLjyRc6Zk/ixW5xLqZdJkTLTRL37xV3Wig8j0BssHbbIsgW4kQHImSoNiUc7P+dXBeuA4qhdHbIkEqJQfdk1kq6Ex4f/ILpKSqsmFvP+cXBRH9HWMTQhaKIMkL1VD50QBcFgL5Pq87ggqDYCqgR0zB1x98kPelIUCpwSjsVZU4CTJVLi/5Vb709BR1bzE+Dprt8Ic0rmoFqWQgjndNiJw5HuJB1uxGmBUBLXc9JCkfksTrWsIgwphnZdCFlVIR+tm+ZMcwFCnvo77XbwUZ08Ik9CrDHmZp0BWkOVjt50SIDCse0+6eP8OLy7ypehSt1EvXQ9tSi/B39au3a/yP9dnncDcUDM87r5NDgVSfgo64QnxsIVd7ZB5Im3YBQlpSdvpGdkogjez1KGRLqMuUdm54K1DC4lwah4QzYiCtWEk+Wa0zIlFano6c331t0aZYNzupldk2NLW+vgm7SAxQHTY8wEtGOmfgBYQs+8QjgfR7LMX4ewn8xpKMhFyoztYszZT7/4n0R9zF/DdSJ9Vi0xCe3UmnjgLKFFjbEo+iivUqOfDR00blwuRj2bvImj03owBXzHhn5k7bYmFIsMLuHEnoZSaUVdXqqCDpe0IIHF3Y9aEckGRzKgP+oRCw13YCNME0wMTANBglghkgBZQMEAgEFAAQgunA08O+F0mB8OVetfNopUymBKcJ7bmT3yq4+47eFFN0EFH/sFOF49UbbIpIErPvLjapGnsokAgInEA==
+          EOF
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+          <uses-permission android:name="android.permission.INTERNET"/>
+          <uses-permission android:name="android.permission.WAKE_LOCK"/>
+          <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
+          <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+          <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+          <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+          <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
+          <application android:label="Lux Monitor" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:theme="@android:style/Theme.Material.NoActionBar">
+          <activity android:name=".MainActivity" android:exported="true" android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"><intent-filter>
+          <action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/>
+          </intent-filter></activity><service android:name=".MonitorService" android:exported="false" android:foregroundServiceType="specialUse"><property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Local inverter monitoring"/></service>
+          <receiver android:name=".LuxWidget" android:exported="true"><intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE"/></intent-filter><meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_info"/></receiver>
+          <receiver android:name=".BootReceiver" android:exported="true"><intent-filter><action android:name="android.intent.action.BOOT_COMPLETED"/></intent-filter></receiver>
+          </application></manifest>
+          EOF
+          cat > app/src/main/java/com/lux/monitor/Backup.kt <<'EOF'
+          package com.lux.monitor
+          import android.content.ContentValues
+          import android.content.Context
+          import android.net.Uri
+          import android.provider.MediaStore
+          import org.json.JSONObject
+          import java.io.File
+          import java.util.zip.ZipEntry
+          import java.util.zip.ZipInputStream
+          import java.util.zip.ZipOutputStream
+
+          object Backup{
+            private val names=listOf("history.csv","daily.csv","monthly.csv")
+            fun backup(ctx:Context):String{
+              if(android.os.Build.VERSION.SDK_INT<29) return "Backup needs Android 10 or newer"
+              val v=ContentValues().apply{put(MediaStore.Downloads.DISPLAY_NAME,"LuxMonitor_backup.zip");put(MediaStore.Downloads.MIME_TYPE,"application/zip")}
+              val u=ctx.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI,v)?:return "Backup failed"
+              ZipOutputStream(ctx.contentResolver.openOutputStream(u)).use{ z->
+                for(n in names){ val f=File(ctx.filesDir,n); if(f.exists()){ z.putNextEntry(ZipEntry(n)); f.inputStream().use{it.copyTo(z)}; z.closeEntry() } }
+                val j=JSONObject(); ctx.getSharedPreferences("c",0).all.forEach{ (k,x)-> j.put(k,x.toString()) }
+                z.putNextEntry(ZipEntry("prefs.json")); z.write(j.toString().toByteArray()); z.closeEntry() }
+              return "Saved to Downloads/LuxMonitor_backup.zip"
+            }
+            fun restore(ctx:Context,uri:Uri):String{
+              val input=ctx.contentResolver.openInputStream(uri)?:return "Couldn't read the file"
+              var n=0
+              ZipInputStream(input).use{ z->
+                var e=z.nextEntry
+                while(e!=null){
+                  if(e.name=="prefs.json"){
+                    val j=JSONObject(String(z.readBytes())); val ed=ctx.getSharedPreferences("c",0).edit()
+                    j.keys().forEach{ ed.putString(it,j.getString(it)) }; ed.apply(); n++
+                  } else if(e.name in names){ File(ctx.filesDir,e.name).outputStream().use{ z.copyTo(it) }; n++ }
+                  z.closeEntry(); e=z.nextEntry } }
+              return if(n==0) "Not a Lux Monitor backup" else "Restored. Close the app completely and reopen it."
+            }
+          }
+          EOF
+          cat > app/src/main/java/com/lux/monitor/Extras.kt <<'EOF'
+          package com.lux.monitor
+          import android.app.Activity
+          import android.content.Context
+          import android.content.SharedPreferences
+          import android.content.pm.ActivityInfo
+          import android.view.WindowManager
+          import androidx.activity.compose.rememberLauncherForActivityResult
+          import androidx.activity.result.contract.ActivityResultContracts
+          import androidx.compose.foundation.background
+          import androidx.compose.foundation.clickable
+          import androidx.compose.foundation.layout.*
+          import androidx.compose.foundation.rememberScrollState
+          import androidx.compose.foundation.verticalScroll
+          import androidx.compose.foundation.shape.RoundedCornerShape
+          import androidx.compose.material3.*
+          import androidx.compose.runtime.*
+          import androidx.compose.ui.Alignment
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.graphics.Color
+          import androidx.compose.ui.platform.LocalContext
+          import androidx.compose.ui.text.font.FontFamily
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.unit.dp
+          import androidx.compose.ui.unit.sp
+          import kotlinx.coroutines.Dispatchers
+          import kotlinx.coroutines.launch
+          import java.time.Instant
+          import java.time.LocalDate
+          import java.time.LocalDateTime
+          import java.time.YearMonth
+          import java.time.ZoneId
+          import java.time.format.DateTimeFormatter
+          import java.time.temporal.ChronoUnit
+
+          fun fmtT(t:LocalDateTime):String=t.format(DateTimeFormatter.ofPattern("EEE HH:mm"))
+          fun toast(ctx:Context,s:String)=android.widget.Toast.makeText(ctx,s,android.widget.Toast.LENGTH_LONG).show()
+
+          @Composable fun PrefField(sp:SharedPreferences,key:String,label:String,def:String,mod:Modifier=Modifier.fillMaxWidth()){
+            var v by remember{mutableStateOf(sp.getString(key,def)!!)}
+            OutlinedTextField(v,{v=it;sp.edit().putString(key,it).apply()},label={Text(label)},singleLine=true,modifier=mod)
+          }
+          @Composable fun PrefSwitch(sp:SharedPreferences,key:String,label:String,def:String="1"){
+            var v by remember{mutableStateOf(sp.getString(key,def)=="1")}
+            Row(Modifier.fillMaxWidth(),Arrangement.SpaceBetween,Alignment.CenterVertically){
+              Text(label,color=WHITE,fontSize=13.sp,modifier=Modifier.weight(1f).padding(end=8.dp))
+              Switch(v,{v=it;sp.edit().putString(key,if(it) "1" else "0").apply()}) }
+          }
+
+          /** Average household load for each hour of the day, learned from the saved 7-day history. */
+          fun loadProfile(fallback:Double):DoubleArray{
+            val sum=DoubleArray(24); val n=IntArray(24); val z=ZoneId.systemDefault()
+            History.pts.forEach{ val h=Instant.ofEpochMilli(it.t).atZone(z).hour; sum[h]+=it.load.toDouble(); n[h]++ }
+            val tot=if(n.sum()>0) sum.sum()/n.sum() else fallback
+            return DoubleArray(24){ if(n[it]>=5) sum[it]/n[it] else tot }
+          }
+
+          class Outlook(val emptyAt:LocalDateTime?,val minSoc:Int,val socAt:Int?)
+          fun sunriseOf(f:Fc):LocalDateTime?{
+            val r=f.hrs.associate{it.first to it.second}
+            var t=LocalDateTime.now().truncatedTo(ChronoUnit.HOURS).plusHours(1)
+            for(i in 0 until 47){ if((r[t]?:0.0)>50&&(r[t.minusHours(1)]?:0.0)<=50) return t; t=t.plusHours(1) }
+            return null
+          }
+          /** Hour-by-hour battery simulation for the next 48 h if the grid were down. */
+          fun simulate(f:Fc,k:Double,soc:Int,cap:Double,res:Int,prof:DoubleArray,sun:Boolean,target:LocalDateTime?):Outlook{
+            val capWh=cap*1000; val resWh=capWh*res/100; var e=capWh*soc/100
+            val rad=f.hrs.associate{it.first to it.second}
+            var t=LocalDateTime.now().truncatedTo(ChronoUnit.HOURS)
+            var minE=e; var at:Int?=null
+            for(i in 0 until 48){
+              if(t==target) at=(e/capWh*100).toInt()
+              val net=(if(sun) k*(rad[t]?:0.0) else 0.0)-prof[t.hour]
+              e=if(net>0) minOf(capWh,e+net*0.95) else e+net/0.94
+              if(e<minE) minE=e
+              if(e<=resWh) return Outlook(t,res,at)
+              t=t.plusHours(1)
+            }
+            return Outlook(null,(minE/capWh*100).toInt(),at)
+          }
+          class Win(val start:LocalDateTime,val end:LocalDateTime,val kw:Double)
+          fun bestWindow(f:Fc,k:Double,prof:DoubleArray):Win?{
+            val now=LocalDateTime.now().truncatedTo(ChronoUnit.HOURS); val rad=f.hrs.associate{it.first to it.second}
+            var best:Win?=null
+            for(i in 0..20){
+              val s=now.plusHours(i.toLong())
+              val avg=(0..2).map{ val t=s.plusHours(it.toLong()); k*(rad[t]?:0.0)-prof[t.hour] }.average()
+              val b=best
+              if(b==null||avg/1000.0>b.kw) best=Win(s,s.plusHours(3),avg/1000.0) }
+            return best?.takeIf{it.kw>0.5}
+          }
+          fun peakShare(ps:Int,pe:Int):Double?{
+            var tot=0.0; var pk=0.0; val z=ZoneId.systemDefault()
+            History.pts.forEach{ if(it.grid<0){ val w=-it.grid.toDouble(); tot+=w; val h=Instant.ofEpochMilli(it.t).atZone(z).hour
+              if(if(ps<=pe) h>=ps&&h<pe else h>=ps||h<pe) pk+=w } }
+            return if(tot>0) pk/tot else null
+          }
+          class SH(val name:String,val share:Double,val normal:Double)
+          fun panelHealth():List<SH>?{
+            val days=Daily.days.entries.filter{it.value.size>9&&it.value[6]+it.value[7]+it.value[8]>3}.sortedBy{it.key}.takeLast(15)
+            if(days.size<3) return null
+            fun share(v:List<Double>,i:Int)=v[6+i]/(v[6]+v[7]+v[8])
+            val last=days.last().value; val hist=days.dropLast(1)
+            return (0..2).map{ i-> SH("String ${i+1}",share(last,i),hist.map{ share(it.value,i) }.sorted().let{ l->l[l.size/2] }) }
+          }
+          fun cellTrend():Pair<Double,Double>?{
+            val v=Daily.days.entries.filter{it.value.size>9&&it.value[9]>0}.sortedBy{it.key}.map{it.value[9]}
+            if(v.size<4) return null
+            val recent=v.takeLast(7).average(); val before=v.dropLast(7).takeLast(14).average()
+            return Pair(recent,if(before.isNaN()) recent else before)
+          }
+
+          @Composable fun OutlookLine(title:String,o:Outlook?,sr:LocalDateTime?){
+            if(o==null) return
+            val e=o.emptyAt
+            val bad=e!=null&&sr!=null&&e.isBefore(sr)
+            val txt=if(e!=null) "Runs down to reserve "+fmtT(e)+(if(sr!=null) (if(bad) " - BEFORE sunrise" else " - after sunrise") else "")
+              else "Lasts 48 h or more. Lowest ${o.minSoc}%"
+            Column(Modifier.padding(vertical=4.dp)){
+              Text(title,fontSize=11.sp,color=DIM)
+              Text(txt+(o.socAt?.let{" - about $it% at sunrise"}?:""),fontSize=13.sp,color=if(bad) RED else GREEN) }
+          }
+
+          @Composable fun ColumnScope.ExtrasTab(sp:SharedPreferences,onWall:()->Unit){
+            val ctx=LocalContext.current; val scope=rememberCoroutineScope()
+            val live=Store.d
+            val cap=sp.getString("c","15.36")!!.toDoubleOrNull()?:15.36; val res=sp.getString("r","10")!!.toIntOrNull()?:10
+            val cur=sp.getString("cu","$")!!
+            val ri=sp.getString("ri","0.25")!!.toDoubleOrNull()?:0.0; val re=sp.getString("re","0.10")!!.toDoubleOrNull()?:0.0
+            val coords=sp.getString("lat","")!!.isNotBlank()&&sp.getString("lon","")!!.isNotBlank()
+            val src=Store.fc?:(if(!coords) sampleFc() else null)
+            val kwp=sp.getString("kwp","10")!!.toDoubleOrNull()?:10.0
+            val fr=src?.let{ forecast(it,kwp) }
+            val prof=loadProfile(live?.load?.toDouble()?:900.0)
+            val soc=live?.soc?:62
+            val sRise=src?.let{ sunriseOf(it) }
+            val oSun=if(src!=null&&fr!=null) simulate(src,fr.k,soc,cap,res,prof,true,sRise) else null
+            val oNo=if(src!=null) simulate(src,0.0,soc,cap,res,prof,false,sRise) else null
+            val noSunH=oNo?.emptyAt?.let{ ChronoUnit.HOURS.between(LocalDateTime.now(),it) }?:48L
+            val usual=Daily.days.entries.filter{it.value[0]>1}.sortedByDescending{it.key}.take(7).map{it.value[0]}.takeIf{it.isNotEmpty()}?.average()
+            val tmrw=fr?.rows?.getOrNull(1)?.prod
+            val issues=ArrayList<String>()
+            if(soc<80) issues.add("battery at $soc%")
+            if(noSunH<24) issues.add("only about $noSunH h of backup without sun")
+            if(tmrw!=null&&usual!=null&&tmrw<0.5*usual) issues.add("low sun forecast tomorrow")
+
+            Section("SUNRISE OUTLOOK (IF THE GRID FAILS)",I_SOL,AMBER,expanded=true){
+              Text("Battery $soc%, reserve $res%. Uses your usual load for each hour and the hourly sun forecast.",fontSize=11.sp,color=DIM)
+              if(src==null) Text("Add your latitude and longitude in Settings for the forecast.",fontSize=12.sp,color=AMBER)
+              else{
+                if(!coords) Text("Sample forecast - add your location in Settings.",fontSize=12.sp,color=AMBER)
+                if(sRise!=null) Text("Next sunrise about "+fmtT(sRise),fontSize=12.sp,color=WHITE,modifier=Modifier.padding(top=6.dp))
+                OutlookLine("With the forecast sun",oSun,sRise)
+                OutlookLine("With no sun at all (worst case)",oNo,sRise)
+              }
+            }
+
+            var confirm by remember{mutableStateOf(false)}
+            var smMsg by remember{mutableStateOf("")}
+            val host=sp.getString("h","")!!.trim(); val dl=sp.getString("d","")!!.trim(); val sn=sp.getString("s","")!!.trim()
+            val target=(sp.getString("smres","90")!!.toIntOrNull()?:90).coerceIn(10,90)
+            fun doIt(block:()->String){ scope.launch(Dispatchers.IO){ smMsg=try{ block() }catch(e:Exception){ "Failed: "+(e.message?:e.toString()) } } }
+            if(confirm) AlertDialog(onDismissRequest={confirm=false},
+              title={Text("Enable storm mode?")},
+              text={Text("This changes two settings on your inverter: the discharge cut-off is raised to $target% so the battery is kept full for an outage, and the AC-charge SOC limit is set to 100%. Your current values are saved so you can restore them. AC charging must already be enabled on the inverter for grid charging to happen. This is untested on your hardware, so check the LuxPower app afterwards.")},
+              confirmButton={TextButton({ confirm=false
+                doIt{
+                  val a=LuxClient.readHold(host,dl,sn,105); val b=LuxClient.readHold(host,dl,sn,67)
+                  if(a !in 0..100||b !in 0..100) return@doIt "Unexpected values read ($a, $b). Nothing was changed."
+                  sp.edit().putString("sm105",a.toString()).putString("sm67",b.toString()).putString("sm_on","1").apply()
+                  LuxClient.writeHold(host,dl,sn,105,target); LuxClient.writeHold(host,dl,sn,67,100)
+                  val a2=LuxClient.readHold(host,dl,sn,105); val b2=LuxClient.readHold(host,dl,sn,67)
+                  if(a2==target&&b2==100) "Storm mode ON. Cut-off $a to $a2%, AC-charge limit $b to $b2%. Originals saved." else "Write not confirmed (read back $a2 and $b2). Check the LuxPower app." }
+              }){Text("Enable")}},
+              dismissButton={TextButton({confirm=false}){Text("Cancel")}})
+            Section("STORM READINESS & STORM MODE",I_BAT,GREEN,summary=if(issues.isEmpty()) "Ready" else "Caution"){
+              Text(if(issues.isEmpty()) "Ready: battery is well charged and about ${noSunH}h of backup even with no sun." else "Caution: "+issues.joinToString(", ")+".",
+                fontSize=13.sp,color=if(issues.isEmpty()) GREEN else AMBER)
+              PrefField(sp,"smres","Storm reserve % (10 to 90)","90")
+              Button({ if(host.isBlank()||dl.isBlank()||sn.isBlank()) smMsg="Enter your connection details in Settings first." else confirm=true },Modifier.fillMaxWidth()){Text("Enable storm mode")}
+              OutlinedButton({ doIt{ val a=LuxClient.readHold(host,dl,sn,105); val b=LuxClient.readHold(host,dl,sn,67); "Discharge cut-off $a%, AC-charge limit $b%" } },Modifier.fillMaxWidth()){Text("Read inverter settings")}
+              OutlinedButton({ doIt{
+                val a=sp.getString("sm105","")!!.toIntOrNull(); val b=sp.getString("sm67","")!!.toIntOrNull()
+                if(a==null||b==null) return@doIt "No saved original values."
+                LuxClient.writeHold(host,dl,sn,105,a); LuxClient.writeHold(host,dl,sn,67,b)
+                val a2=LuxClient.readHold(host,dl,sn,105); val b2=LuxClient.readHold(host,dl,sn,67)
+                if(a2==a&&b2==b){ sp.edit().putString("sm_on","0").apply(); "Restored: cut-off $a2%, AC-charge limit $b2%." } else "Restore not confirmed (read back $a2 and $b2). Check the LuxPower app." } },Modifier.fillMaxWidth()){Text("Restore normal settings")}
+              if(smMsg.isNotEmpty()) Text(smMsg,fontSize=12.sp,color=WHITE)
+              if(sp.getString("sm_on","0")=="1") Text("Storm mode is ON. Remember to restore normal settings afterwards.",fontSize=12.sp,color=AMBER)
+            }
+
+            val ph=panelHealth(); val ct=cellTrend()
+            Section("PANEL & BATTERY HEALTH",I_TMP,CYAN){
+              val rows=ph?:listOf(SH("String 1",0.34,0.33),SH("String 2",0.27,0.34),SH("String 3",0.39,0.33))
+              if(ph==null) Text("Sample - needs 3 or more recorded days with sun.",fontSize=12.sp,color=AMBER)
+              rows.forEach{ r->
+                val low=r.share<r.normal*0.85
+                Row(Modifier.fillMaxWidth().padding(vertical=3.dp),Arrangement.SpaceBetween){
+                  Text(r.name,fontSize=12.sp,color=WHITE,modifier=Modifier.weight(1f))
+                  Text("${(r.share*100).toInt()}% of yield (normal ${(r.normal*100).toInt()}%)",fontSize=12.sp,fontFamily=FontFamily.Monospace,color=DIM)
+                  Text(if(low) "  CHECK" else "  OK",fontSize=12.sp,fontWeight=FontWeight.Bold,color=if(low) RED else GREEN) } }
+              Text("A string producing well under its usual share on a sunny day may be shaded, dirty or faulty.",fontSize=11.sp,color=DIM,modifier=Modifier.padding(top=6.dp))
+              if(ct!=null) Text("Battery cell spread: ${ct.first.toInt()} mV over the last 7 days vs ${ct.second.toInt()} mV before"+(if(ct.first>ct.second+30) " - rising, worth watching." else "."),fontSize=12.sp,color=if(ct.first>ct.second+30) AMBER else WHITE,modifier=Modifier.padding(top=8.dp))
+              else Text("Cell spread trend needs 4 or more recorded days.",fontSize=11.sp,color=DIM,modifier=Modifier.padding(top=8.dp))
+            }
+
+            Section("BILL ESTIMATOR & TIME-OF-USE",I_GRID,BLUE){
+              PrefField(sp,"fx","Fixed monthly charge","0")
+              PrefField(sp,"rp","Peak import rate per kWh (0 = no peak rate)","0")
+              Row(Modifier.fillMaxWidth(),Arrangement.spacedBy(8.dp)){ PrefField(sp,"ps","Peak starts (hour)","17",Modifier.weight(1f)); PrefField(sp,"pe","Peak ends (hour)","21",Modifier.weight(1f)) }
+              val fx=sp.getString("fx","0")!!.toDoubleOrNull()?:0.0; val rp=sp.getString("rp","0")!!.toDoubleOrNull()?:0.0
+              val ps=sp.getString("ps","17")!!.toIntOrNull()?:17; val pe=sp.getString("pe","21")!!.toIntOrNull()?:21
+              val today=LocalDate.now(); val share=peakShare(ps,pe)
+              val eff=if(rp>0&&share!=null) ri*(1-share)+rp*share else ri
+              val pr=period(today.withDayOfMonth(1),today,ri,re).s
+              val soFar=pr[2]*eff-pr[3]*re+fx
+              val rec=Daily.days.entries.filter{it.key<today.toString()}.sortedByDescending{it.key}.take(7).map{it.value}
+              val avgNet=if(rec.isEmpty()) 0.0 else rec.map{ it[2]*eff-it[3]*re }.average()
+              val proj=soFar+avgNet*(today.lengthOfMonth()-today.dayOfMonth)
+              val lastM=Monthly.rows[YearMonth.now().minusMonths(1).toString()]?.let{ it[6]-it[7] }
+              Spacer(Modifier.height(4.dp))
+              Row(Modifier.fillMaxWidth(),Arrangement.spacedBy(8.dp)){
+                Kpi("SO FAR",soFar,BLUE,I_GRID,Modifier.weight(1f),cur,2); Kpi("PROJECTED",proj,AMBER,I_GRID,Modifier.weight(1f),cur,2)
+                Kpi("LAST MONTH",lastM?:0.0,GREEN,I_GRID,Modifier.weight(1f),cur,2) }
+              Text("Month to date: import ${"%.0f".format(pr[2])} kWh, export ${"%.0f".format(pr[3])} kWh."+(if(share!=null&&rp>0) " Peak hours are ${(share*100).toInt()}% of your imports (last 7 days), so the import rate is blended." else "")+" Projection assumes the last 7 days continue. Last month comes from your imported Home Assistant data.",fontSize=11.sp,color=DIM,modifier=Modifier.padding(top=8.dp))
+            }
+
+            val bw=if(src!=null&&fr!=null) bestWindow(src,fr.k,prof) else null
+            Section("BEST TIME FOR BIG LOADS",I_SOL,AMBER,summary=bw?.let{ "%02d:00-%02d:00".format(it.start.hour,it.end.hour) }?:""){
+              if(bw!=null) Text("Run the dryer, EV charger or dishwasher "+fmtT(bw.start)+" to "+fmtT(bw.end)+" - about ${"%.1f".format(bw.kw)} kW of spare solar.",fontSize=13.sp,color=GREEN)
+              else Text("No strong solar surplus in the next 24 hours.",fontSize=13.sp,color=DIM)
+              Text("Based on the forecast sun and your usual load for each hour.",fontSize=11.sp,color=DIM,modifier=Modifier.padding(top=6.dp))
+            }
+
+            val restore=rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()){ uri-> if(uri!=null) toast(ctx,Backup.restore(ctx,uri)) }
+            Section("NOTIFICATIONS, DISPLAY & BACKUP",I_SET,VIOLET){
+              PrefSwitch(sp,"ws","Weekly summary (Sundays, 6 pm)")
+              PrefSwitch(sp,"sw","Storm-watch alert (low sun tomorrow and low battery)")
+              OutlinedButton({ onWall() },Modifier.fillMaxWidth()){Text("Wall display (landscape, screen stays on)")}
+              Button({ toast(ctx,Backup.backup(ctx)) },Modifier.fillMaxWidth()){Text("Back up history and settings")}
+              OutlinedButton({ restore.launch(arrayOf("*/*")) },Modifier.fillMaxWidth()){Text("Restore from backup")}
+              Text("Backup saves history, daily totals, imported months and settings to Downloads.",fontSize=11.sp,color=DIM)
+            }
+          }
+
+          @Composable fun WallScreen(x:Lux,rt:String,onExit:()->Unit){
+            val ctx=LocalContext.current
+            DisposableEffect(Unit){
+              val a=ctx as? Activity
+              a?.requestedOrientation=ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+              a?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+              onDispose{ a?.requestedOrientation=ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED; a?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) } }
+            Column(Modifier.fillMaxSize().background(BG).clickable{onExit()}.verticalScroll(rememberScrollState()).padding(12.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){
+              LandscapeBoard(x,rt)
+              Text("Tap anywhere to exit",fontSize=11.sp,color=DIM) }
+          }
+          EOF
+          cat > app/src/main/java/com/lux/monitor/Forecast.kt <<'EOF'
+          package com.lux.monitor
+          import org.json.JSONObject
+          import java.net.HttpURLConnection
+          import java.net.URL
+          import java.time.LocalDate
+          import java.time.LocalDateTime
+          import java.time.YearMonth
+
+          class Fc(val dates:List<String>,val rad:List<Double>,val hrs:List<Pair<LocalDateTime,Double>> = emptyList())          // daily solar radiation in kWh/m2: 14 past days + 7 forecast days
+          class FDay(val date:String,val prod:Double,val net:Double)
+          class FRes(val rows:List<FDay>,val k:Double,val n:Int,val err:Double,val note:String,val cons:Double,val bat:Double)
+
+          fun fetchForecast(lat:String,lon:String):Fc?{
+            val u=URL("https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lon&daily=shortwave_radiation_sum&hourly=shortwave_radiation&timezone=auto&past_days=14&forecast_days=7")
+            val c=u.openConnection() as HttpURLConnection; c.connectTimeout=8000; c.readTimeout=8000
+            val root=JSONObject(c.inputStream.bufferedReader().readText()); val j=root.getJSONObject("daily")
+            val hj=root.getJSONObject("hourly"); val ht=hj.getJSONArray("time"); val hr=hj.getJSONArray("shortwave_radiation")
+            val t=j.getJSONArray("time"); val r=j.getJSONArray("shortwave_radiation_sum")
+            return Fc((0 until t.length()).map{t.getString(it)},(0 until r.length()).map{ if(r.isNull(it)) 0.0 else r.getDouble(it)/3.6 },
+              (0 until ht.length()).map{ Pair(LocalDateTime.parse(ht.getString(it)),if(hr.isNull(it)) 0.0 else hr.getDouble(it)) })
+          }
+          fun sampleFc():Fc{
+            val t=LocalDate.now()
+            val r=listOf(5.8,6.1,5.2,4.4,6.0,6.2,5.9,3.8,5.5,6.1,5.7,4.9,5.8,6.0, 5.9,6.1,4.2,5.5,6.0,3.1,5.8)
+            val hrs=(0 until 21*24).map{ i-> val h=i%24; val day=r[i/24]; Pair(t.minusDays(14).atStartOfDay().plusHours(i.toLong()),if(h in 6..18) Math.sin(Math.PI*(h-6)/12.0)*850.0*day/5.8 else 0.0) }
+            return Fc((0 until 21).map{t.minusDays(14L-it).toString()},r,hrs)
+          }
+
+          /** Adaptive model: production = k x daily radiation. k is learned from your recorded daily yield, then
+           *  net export = production - typical consumption - typical battery charging (learned from the last 14 recorded days). */
+          fun forecast(fc:Fc,kwp:Double):FRes{
+            val today=LocalDate.now().toString()
+            fun yOf(d:String)=Daily.days[d]?.get(0)
+            val cal=fc.dates.indices.filter{ fc.dates[it]<today&&(yOf(fc.dates[it])?:0.0)>1&&fc.rad[it]>1 }
+            val past=fc.dates.indices.filter{ fc.dates[it]<today }
+            val lm=Monthly.lastComplete()
+            val k:Double; val note:String
+            if(cal.size>=3){ k=cal.map{yOf(fc.dates[it])!!/fc.rad[it]}.sorted().let{it[it.size/2]}; note="learned from ${cal.size} recorded days" }
+            else if(lm!=null&&past.isNotEmpty()){ k=lm.second[0]/YearMonth.parse(lm.first).lengthOfMonth()/maxOf(0.5,past.map{fc.rad[it]}.average()); note="scaled from ${lm.first} history" }
+            else { k=kwp*0.8; note="estimated from system size" }
+            val err=if(cal.isEmpty()) 0.0 else cal.map{ Math.abs(k*fc.rad[it]-yOf(fc.dates[it])!!)/yOf(fc.dates[it])!! }.average()
+            val rec=Daily.days.entries.filter{it.key<today}.sortedByDescending{it.key}.take(14).map{it.value}
+            val cons:Double; val bat:Double
+            if(rec.size>=3){ cons=rec.map{it[1]}.average(); bat=rec.map{it[4]-it[5]}.average() }
+            else if(lm!=null){ val n=YearMonth.parse(lm.first).lengthOfMonth(); cons=lm.second[1]/n; bat=(lm.second[4]-lm.second[5])/n }
+            else { cons=15.0; bat=0.0 }
+            val rows=fc.dates.indices.filter{fc.dates[it]>=today}.map{ val p=k*fc.rad[it]; FDay(fc.dates[it],p,p-cons-bat) }
+            return FRes(rows,k,cal.size,err,note,cons,bat)
+          }
+
+          fun monthTable(ri:Double,re:Double):List<Pair<String,List<Double>>>{
+            val m=HashMap<String,List<Double>>(Monthly.rows)
+            val acc=HashMap<String,DoubleArray>()
+            Daily.days.forEach{ (d,v)-> val k=d.substring(0,7); if(!m.containsKey(k)){ val a=acc.getOrPut(k){DoubleArray(8)}; for(i in 0..5) a[i]+=v[i] } }
+            acc.forEach{ (k,a)-> a[6]=a[2]*ri; a[7]=a[3]*re; m[k]=a.toList() }
+            return m.entries.sortedByDescending{it.key}.map{ Pair(it.key,it.value) }
+          }
+
+          class Period(val s:DoubleArray,val exact:Int,val est:Int,val miss:Int)
+          /** Totals for a date range. Uses whole imported months exactly, recorded/imported days next, and prorates monthly totals for the rest. */
+          fun period(f:LocalDate,t:LocalDate,ri:Double,re:Double):Period{
+            val s=DoubleArray(8); var exact=0; var est=0; var miss=0
+            var d=f
+            while(!d.isAfter(t)){
+              val ym=YearMonth.from(d); val first=ym.atDay(1); val last=ym.atEndOfMonth()
+              val mr=Monthly.rows[ym.toString()]
+              if(mr!=null&&!f.isAfter(first)&&!t.isBefore(last)){ for(i in 0..7) s[i]+=mr[i]; exact+=ym.lengthOfMonth(); d=last.plusDays(1); continue }
+              val v=Daily.days[d.toString()]
+              if(v!=null){ for(i in 0..5) s[i]+=v[i]; s[6]+=v[2]*ri; s[7]+=v[3]*re; exact++ }
+              else if(mr!=null){ val n=ym.lengthOfMonth(); for(i in 0..7) s[i]+=mr[i]/n; est++ }
+              else miss++
+              d=d.plusDays(1)
+            }
+            return Period(s,exact,est,miss)
+          }
+          EOF
+          cat > app/src/main/java/com/lux/monitor/History.kt <<'EOF'
+          package com.lux.monitor
+          import android.content.ContentValues
+          import android.content.Context
+          import android.provider.MediaStore
+          import androidx.compose.runtime.mutableStateListOf
+          import androidx.compose.runtime.mutableStateMapOf
+          import android.net.Uri
+          import java.time.Duration
+          import java.time.Instant
+          import java.time.LocalDate
+          import java.time.YearMonth
+          import java.time.ZoneId
+          import java.time.ZoneOffset
+          import java.io.File
+          import java.text.SimpleDateFormat
+          import java.util.Date
+
+          class Pt(val t:Long,val pv:Int,val bat:Int,val grid:Int,val load:Int,val soc:Int)
+
+          /** One sample per minute, kept for 7 days in app storage. bat: + = charging, grid: + = export. */
+          object History{
+            val pts=mutableStateListOf<Pt>()
+            private var file:File?=null; private var last=0L
+            fun init(ctx:Context){
+              if(file!=null) return
+              val f=File(ctx.filesDir,"history.csv"); file=f
+              val cut=System.currentTimeMillis()-7*86400000L
+              if(f.exists()) f.forEachLine{ l->
+                val p=l.split(",")
+                val t=p.getOrNull(0)?.toLongOrNull()
+                if(p.size==6&&t!=null&&t>=cut) pts.add(Pt(t,p[1].toInt(),p[2].toInt(),p[3].toInt(),p[4].toInt(),p[5].toInt())) }
+            }
+            fun add(ctx:Context,x:Lux){
+              init(ctx); val now=System.currentTimeMillis(); if(now-last<60000) return; last=now
+              val p=Pt(now,x.pv,x.charge-x.discharge,x.gridOut-x.gridIn,x.load,x.soc); pts.add(p)
+              file!!.appendText("${p.t},${p.pv},${p.bat},${p.grid},${p.load},${p.soc}\n")
+              if(pts.size>10100){ pts.subList(0,100).clear(); file!!.writeText(pts.joinToString(""){"${it.t},${it.pv},${it.bat},${it.grid},${it.load},${it.soc}\n"}) }
+            }
+            fun export(ctx:Context):String{
+              if(android.os.Build.VERSION.SDK_INT<29) return "Export needs Android 10 or newer"
+              init(ctx)
+              val v=ContentValues().apply{put(MediaStore.Downloads.DISPLAY_NAME,"LuxMonitor_history.csv");put(MediaStore.Downloads.MIME_TYPE,"text/csv")}
+              val u=ctx.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI,v)?:return "Export failed"
+              val df=SimpleDateFormat("yyyy-MM-dd HH:mm")
+              ctx.contentResolver.openOutputStream(u)?.use{ o->
+                o.write("time,solar_w,battery_w(charging+),grid_w(export+),load_w,soc\n".toByteArray())
+                pts.forEach{ o.write("${df.format(Date(it.t))},${it.pv},${it.bat},${it.grid},${it.load},${it.soc}\n".toByteArray()) } }
+              return "Saved to Downloads/LuxMonitor_history.csv"
+            }
+          }
+
+          /** Day totals (from the inverter's own daily counters), kept indefinitely. Order: yield, consumption, import, export, charge, discharge. */
+          object Daily{
+            val days=mutableStateMapOf<String,List<Double>>()
+            private var file:File?=null; private var last=0L
+            fun init(ctx:Context){
+              if(file!=null) return
+              val f=File(ctx.filesDir,"daily.csv"); file=f
+              if(f.exists()) f.forEachLine{ l-> val p=l.split(","); if(p.size>=7) days[p[0]]=p.drop(1).map{it.toDoubleOrNull()?:0.0} }
+            }
+            fun put(ctx:Context,x:Lux){
+              init(ctx); val key=LocalDate.now().toString()
+              val dm=maxOf(days[key]?.getOrNull(9)?:0.0,if(x.cellMaxV>0) (x.cellMaxV-x.cellMinV)*1000.0 else 0.0)
+              days[key]=listOf(x.yld,x.cons,x.impDay,x.expDay,x.chgDay,x.dischgDay,x.e1,x.e2,x.e3,dm)
+              val n=System.currentTimeMillis(); if(n-last<60000) return; last=n
+              flush()
+            }
+            fun flush(){ file?.writeText(days.entries.sortedBy{it.key}.joinToString(""){"${it.key},${it.value.joinToString(",")}\n"}) }
+            fun sum(from:LocalDate,to:LocalDate):Pair<List<Double>,Int>{
+              var d=from; val t=MutableList(6){0.0}; var n=0
+              while(!d.isAfter(to)){ days[d.toString()]?.let{ v-> n++; for(i in 0..5) t[i]+=v[i] }; d=d.plusDays(1) }
+              return Pair(t,n)
+            }
+          }
+
+          /** Monthly totals imported from a Home Assistant Energy dashboard CSV. Order: yield, consumption, import, export, charge, discharge, import cost, export credit. */
+          object Monthly{
+            val rows=mutableStateMapOf<String,List<Double>>()
+            private var file:File?=null
+            fun init(ctx:Context){
+              if(file!=null) return
+              val f=File(ctx.filesDir,"monthly.csv"); file=f
+              if(f.exists()) f.forEachLine{ l-> val p=l.split(","); if(p.size==9) rows[p[0]]=p.drop(1).map{it.toDoubleOrNull()?:0.0} }
+            }
+            fun save(){ file?.writeText(rows.entries.sortedBy{it.key}.joinToString(""){"${it.key},${it.value.joinToString(",")}\n"}) }
+            fun lastComplete():Pair<String,List<Double>>?{
+              val cur=YearMonth.now().toString()
+              return rows.entries.filter{it.key<cur}.maxByOrNull{it.key}?.let{ Pair(it.key,it.value) }
+            }
+            fun importCsv(ctx:Context,uri:Uri):String{
+              init(ctx); Daily.init(ctx)
+              val lines=ctx.contentResolver.openInputStream(uri)?.bufferedReader()?.readLines()?:return "Couldn't read the file"
+              if(lines.size<2) return "The file is empty"
+              val h=lines[0].removePrefix("\uFEFF").split(",")
+              if(h.size<4||h[1]!="type") return "This doesn't look like a Home Assistant energy export"
+              val inst=h.drop(3).map{ runCatching{Instant.parse(it)}.getOrNull() }
+              if(inst.any{it==null}) return "Unexpected date columns"
+              val hrs=if(inst.size>1) Duration.between(inst[0],inst[1]).toHours() else 720L
+              val idx=mapOf("solar_production" to 0,"calculated_total_consumption" to 1,"grid_consumption" to 2,"grid_return" to 3,
+                "battery_in" to 4,"battery_out" to 5,"grid_consumption_cost" to 6,"grid_return_compensation" to 7)
+              val tmp=HashMap<String,DoubleArray>()
+              for(l in lines.drop(1)){
+                val c=l.split(","); val k=idx[c.getOrNull(1)]?:continue
+                for(j in inst.indices){
+                  val v=c.getOrNull(3+j)?.toDoubleOrNull()?:continue; val t=inst[j]!!
+                  val key=if(hrs>=600) t.plusSeconds(43200).atZone(ZoneOffset.UTC).toLocalDate().toString().substring(0,7)
+                    else if(hrs>=20) t.plusSeconds(43200).atZone(ZoneOffset.UTC).toLocalDate().toString()
+                    else t.atZone(ZoneId.systemDefault()).toLocalDate().toString()
+                  tmp.getOrPut(key){DoubleArray(8)}[k]+=v } }
+              var m=0; var d=0
+              for((k,a) in tmp){ if(k.length==7){ rows[k]=a.toList(); m++ } else { Daily.days[k]=a.take(6); d++ } }
+              file!!.writeText(rows.entries.sortedBy{it.key}.joinToString(""){"${it.key},${it.value.joinToString(",")}\n"})
+              Daily.flush()
+              return if(m+d==0) "No usable rows found" else "Imported $m months and $d days"
+            }
+          }
+          EOF
+          cat > app/src/main/java/com/lux/monitor/Landscape.kt <<'EOF'
+          package com.lux.monitor
+          import androidx.compose.foundation.layout.*
+          import androidx.compose.foundation.shape.RoundedCornerShape
+          import androidx.compose.material3.*
+          import androidx.compose.runtime.*
+          import androidx.compose.ui.Alignment
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.draw.clip
+          import androidx.compose.ui.graphics.Brush
+          import androidx.compose.ui.graphics.Color
+          import androidx.compose.ui.graphics.Path
+          import androidx.compose.ui.text.font.FontFamily
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.foundation.background
+          import androidx.compose.ui.unit.dp
+          import androidx.compose.ui.unit.sp
+
+          /** Always-open card, same look as a Section. */
+          @Composable fun Panel(title:String,ic:Path,col:Color,mod:Modifier=Modifier,content:@Composable ColumnScope.()->Unit){
+            Card(mod,shape=RoundedCornerShape(20.dp),colors=CardDefaults.cardColors(containerColor=CARD)){
+              Column(Modifier.padding(12.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){
+                Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)){
+                  Ico(ic,col,16); Text(title,fontSize=11.sp,letterSpacing=1.5.sp,fontWeight=FontWeight.Bold,color=WHITE) }
+                content() } }
+          }
+
+          /** Landscape layout: daily energy on the left, flow diagram in the middle, efficiency and battery on the right, power graph across the bottom. */
+          @Composable fun LandscapeBoard(x:Lux,rt:String){
+            val hist=Store.d!=null&&History.pts.size>30
+            val cd=if(Store.d==null) DS else chartData(if(hist) 1 else 0)
+            val tl=if(Store.d==null) listOf("00:00","12:00","24:00") else timeLabels(if(hist) 1 else 0)
+            Column(Modifier.fillMaxWidth(),verticalArrangement=Arrangement.spacedBy(10.dp)){
+              Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(10.dp),verticalAlignment=Alignment.CenterVertically){
+                Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(10.dp)){
+                  Panel("DAILY ENERGY",I_SOL,AMBER,Modifier.fillMaxWidth()){
+                    Row(Modifier.fillMaxWidth(),Arrangement.spacedBy(8.dp)){ Kpi("YIELD",x.yld,AMBER,I_SOL,Modifier.weight(1f)); Kpi("USED",x.cons,VIOLET,I_HOME,Modifier.weight(1f)) }
+                    Row(Modifier.fillMaxWidth(),Arrangement.spacedBy(8.dp)){ Kpi("IMPORT",x.impDay,BLUE,I_GRID,Modifier.weight(1f)); Kpi("EXPORT",x.expDay,CYAN,I_GRID,Modifier.weight(1f)) }
+                    Row(Modifier.fillMaxWidth(),Arrangement.spacedBy(8.dp)){ Kpi("BAT IN",x.chgDay,GREEN,I_BAT,Modifier.weight(1f)); Kpi("BAT OUT",x.dischgDay,GREEN,I_BAT,Modifier.weight(1f)) } } }
+                Card(Modifier.weight(1.25f),shape=RoundedCornerShape(22.dp),colors=CardDefaults.cardColors(containerColor=CARD)){ Hero(x,rt) }
+                Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(10.dp)){
+                  Panel("EFFICIENCY",I_INV,CYAN,Modifier.fillMaxWidth()){
+                    Row(Modifier.fillMaxWidth(),Arrangement.spacedBy(8.dp)){
+                      Ratio("SELF-USE",if(x.yld>0) ((x.yld-x.expDay)/x.yld).toFloat() else 0f,VIOLET,I_HOME,Modifier.weight(1f))
+                      Ratio("AUTARKY",if(x.cons>0) (1-x.impDay/x.cons).toFloat() else 0f,CYAN,I_GRID,Modifier.weight(1f))
+                      Ratio("INV LOAD",x.load/12000f,GREEN,I_INV,Modifier.weight(1f)) } }
+                  Panel("BATTERY BANK",I_BAT,GREEN,Modifier.fillMaxWidth()){
+                    Text("${x.soc}%  \u00B7  ${x.vBat} V",fontSize=16.sp,fontFamily=FontFamily.Monospace,fontWeight=FontWeight.Bold,color=WHITE)
+                    Box(Modifier.fillMaxWidth().height(10.dp).clip(RoundedCornerShape(5.dp)).background(Color(0xFF17212C))){
+                      Box(Modifier.fillMaxWidth(maxOf(x.soc/100f,0.01f)).fillMaxHeight().background(Brush.horizontalGradient(listOf(CYAN,GREEN)))) }
+                    Text(if(Store.d==null) "Sample data" else stateText(x.state),fontSize=11.sp,color=DIM) } } }
+              Panel("REAL-TIME POWER",I_HIS,CYAN,Modifier.fillMaxWidth()){
+                Chart(cd,150.dp)
+                Row(Modifier.fillMaxWidth().padding(start=30.dp,end=32.dp),Arrangement.SpaceBetween){ tl.forEach{ Text(it,fontSize=10.sp,color=DIM) } }
+                Legend(cd,false) } }
+          }
+          EOF
+          cat > app/src/main/java/com/lux/monitor/LuxClient.kt <<'EOF'
+          package com.lux.monitor
+          import java.io.DataInputStream
+          import java.net.*
+
+          data class Lux(val soc:Int,val vBat:Double,val pv:Int,val charge:Int,val discharge:Int,
+            val gridIn:Int,val gridOut:Int,val load:Int,val vGrid:Double=230.0,val fGrid:Double=50.0,
+            val yld:Double=17.3,val cons:Double=11.6,val chgDay:Double=0.7,val dischgDay:Double=0.0,val impDay:Double=7.8,val expDay:Double=12.4,val state:Int=4,
+            val tInv:Double=41.0,val tBat:Double=27.0,val cellMaxV:Double=3.345,val cellMinV:Double=3.338,
+            val cellTMax:Double=27.5,val cellTMin:Double=26.1,val cycles:Int=112,val soh:Int=100,
+            val totGen:Double=12840.0,val totExp:Double=7302.0,val totImp:Double=3121.0,val totChg:Double=2500.0,val totDis:Double=2310.0,val fault:Long=0,val warn:Long=0,
+            val pv1:Int=0,val pv2:Int=0,val pv3:Int=0,val vEps:Double=0.0,val e1:Double=0.0,val e2:Double=0.0,val e3:Double=0.0)
+
+          /** LuxPower WiFi dongle protocol (TCP 8000). Register numbers verified against the Lux Modbus register list. */
+          object LuxClient {
+            private const val PROTO = 2   // try 1 if the dongle doesn't answer
+            private fun crc(b:ByteArray,n:Int):Int{var c=0xFFFF
+              for(i in 0 until n){c=c xor (b[i].toInt() and 255);repeat(8){c=if(c and 1!=0)(c shr 1) xor 0xA001 else c shr 1}};return c}
+
+            private fun req(datalog:String,serial:String,reg:Int,count:Int,func:Int=4):ByteArray{
+              val d=ByteArray(18); d[1]=func.toByte()
+              serial.toByteArray().copyInto(d,2)
+              d[12]=reg.toByte();d[13]=(reg shr 8).toByte();d[14]=count.toByte();d[15]=(count shr 8).toByte()
+              val c=crc(d,16);d[16]=c.toByte();d[17]=(c shr 8).toByte()
+              val h=ByteArray(20);h[0]=0xA1.toByte();h[1]=0x1A;h[2]=PROTO.toByte();h[4]=(d.size+14).toByte()
+              h[6]=1;h[7]=0xC2.toByte();datalog.toByteArray().copyInto(h,8);h[18]=d.size.toByte()
+              return h+d
+            }
+
+            private var sock:Socket?=null
+            private var sockHost=""
+            @Synchronized fun close(){ runCatching{ sock?.close() }; sock=null }
+            @Synchronized private fun conn(host:String,fast:Boolean=false):Socket{
+              val c=sock
+              if(c!=null&&!c.isClosed&&sockHost==host) return c
+              close()
+              val n=Socket(); n.connect(InetSocketAddress(host,8000),if(fast) 3000 else 8000); n.soTimeout=6000; n.keepAlive=true; n.tcpNoDelay=true
+              sock=n; sockHost=host; return n
+            }
+            /** Keeps one connection open between polls (fewer handshakes for the dongle) and reconnects once automatically if it drops. */
+            @Synchronized fun poll(host:String,datalog:String,serial:String,fast:Boolean=false):Lux{
+              var last:Exception?=null
+              for(attempt in 0..(if(fast) 0 else 1)){
+                try{ return pollOnce(conn(host,fast),datalog,serial) }
+                catch(e:Exception){ last=e; close() } }
+              throw last!!
+            }
+            private fun pollOnce(s:Socket,datalog:String,serial:String):Lux{
+              val r=IntArray(120); var b3=false
+              run{
+                val out=s.getOutputStream(); val inp=DataInputStream(s.getInputStream())
+                for(base in intArrayOf(0,40,80)){
+                  try{
+                    out.write(req(datalog,serial,base,40));out.flush()
+                    var got=false
+                    repeat(8){ if(!got){
+                      val h=ByteArray(8);inp.readFully(h)
+                      val len=(h[4].toInt() and 255) or ((h[5].toInt() and 255) shl 8)
+                      val rest=ByteArray(len-2);inp.readFully(rest)
+                      val p=h+rest
+                      if(p[7]==0xC2.toByte()&&p.size>=117&&p[21].toInt()==4&&((p[32].toInt() and 255) or ((p[33].toInt() and 255) shl 8))==base){
+                        for(i in 0 until 40) r[base+i]=(p[35+2*i].toInt() and 255) or ((p[36+2*i].toInt() and 255) shl 8)
+                        got=true } } }
+                    if(!got) error("No valid reply from dongle")
+                    if(base==80) b3=true
+                  }catch(e:Exception){ if(base==0) throw e else break }
+                }
+              }
+              fun e(i:Int)=r[i]/10.0
+              fun sg(v:Int)=if(v>=32768) v-65536 else v
+              fun l(i:Int)=((r[i+1].toLong() shl 16) or r[i].toLong())/10.0
+              val pv=r[7]+r[8]+r[9]
+              val imp=e(37); val exp=e(36)
+              val calc=maxOf(0,r[27]+r[16]+r[24]-r[17]-r[26])
+              val load=if(r[0]==64) r[24] else if(b3&&!(r[114]==0&&calc>300)) r[114] else calc
+              return Lux(r[5] and 255,r[4]/10.0,pv,r[10],r[11],r[27],r[26],load,r[12]/10.0,r[15]/100.0,
+                e(28)+e(29)+e(30),maxOf(0.0,imp+e(31)+e(35)-e(32)-exp),e(33),e(34),imp,exp,r[0],
+                tInv=sg(r[64]).toDouble(),tBat=sg(r[67]).toDouble(),cellMaxV=r[101]/1000.0,cellMinV=r[102]/1000.0,
+                cellTMax=sg(r[103])/10.0,cellTMin=sg(r[104])/10.0,cycles=r[106],soh=(r[5] shr 8) and 255,
+                totGen=l(40)+l(42)+l(44),totExp=l(56),totImp=l(58),totChg=l(50),totDis=l(52),
+                fault=(r[61].toLong() shl 16) or r[60].toLong(),warn=(r[63].toLong() shl 16) or r[62].toLong(),
+                pv1=r[7],pv2=r[8],pv3=r[9],vEps=r[20]/10.0,e1=e(28),e2=e(29),e3=e(30))
+            }
+
+            private fun packet(h:DataInputStream):ByteArray{
+              val hd=ByteArray(8); h.readFully(hd)
+              val len=(hd[4].toInt() and 255) or ((hd[5].toInt() and 255) shl 8)
+              val rest=ByteArray(len-2); h.readFully(rest); return hd+rest }
+            /** Reads one holding register (function 3). */
+            @Synchronized fun readHold(host:String,datalog:String,serial:String,reg:Int):Int{
+              close()
+              Socket().use{s->
+                s.connect(InetSocketAddress(host,8000),8000);s.soTimeout=5000
+                s.getOutputStream().apply{write(req(datalog,serial,reg,1,3));flush()}
+                val inp=DataInputStream(s.getInputStream())
+                repeat(8){ val p=packet(inp)
+                  if(p[7]==0xC2.toByte()&&p.size>=37&&p[21].toInt()==3&&((p[32].toInt() and 255) or ((p[33].toInt() and 255) shl 8))==reg)
+                    return (p[35].toInt() and 255) or ((p[36].toInt() and 255) shl 8) } }
+              error("No reply reading register $reg")
+            }
+            /** Writes one holding register (function 6). Always read back afterwards to confirm. */
+            @Synchronized fun writeHold(host:String,datalog:String,serial:String,reg:Int,value:Int){
+              close()
+              Socket().use{s->
+                s.connect(InetSocketAddress(host,8000),8000);s.soTimeout=5000
+                s.getOutputStream().apply{write(req(datalog,serial,reg,value,6));flush()}
+                runCatching{ packet(DataInputStream(s.getInputStream())) } }
+            }
+          }
+          EOF
+          cat > app/src/main/java/com/lux/monitor/LuxCloud.kt <<'EOF'
+          package com.lux.monitor
+          import android.content.SharedPreferences
+          import android.security.keystore.KeyGenParameterSpec
+          import android.security.keystore.KeyProperties
+          import android.util.Base64
+          import androidx.compose.foundation.layout.*
+          import androidx.compose.foundation.shape.RoundedCornerShape
+          import androidx.compose.material3.*
+          import androidx.compose.runtime.*
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.graphics.Color
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.text.input.PasswordVisualTransformation
+          import androidx.compose.ui.unit.dp
+          import androidx.compose.ui.unit.sp
+          import kotlinx.coroutines.Dispatchers
+          import kotlinx.coroutines.launch
+          import org.json.JSONObject
+          import java.net.HttpURLConnection
+          import java.net.URL
+          import java.net.URLEncoder
+          import java.security.KeyStore
+          import javax.crypto.Cipher
+          import javax.crypto.KeyGenerator
+          import javax.crypto.SecretKey
+          import javax.crypto.spec.GCMParameterSpec
+
+          /** Encrypts the cloud password with a key that never leaves the phone's secure hardware keystore. */
+          object Vault{
+            private const val AL="luxmonitor_pw"
+            private fun key():SecretKey{
+              val ks=KeyStore.getInstance("AndroidKeyStore"); ks.load(null)
+              val k=ks.getKey(AL,null) as? SecretKey
+              if(k!=null) return k
+              val g=KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES,"AndroidKeyStore")
+              g.init(KeyGenParameterSpec.Builder(AL,KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).build())
+              return g.generateKey()
+            }
+            fun enc(s:String):String{
+              val c=Cipher.getInstance("AES/GCM/NoPadding"); c.init(Cipher.ENCRYPT_MODE,key())
+              return Base64.encodeToString(c.iv+c.doFinal(s.toByteArray()),Base64.NO_WRAP)
+            }
+            fun dec(s:String):String{
+              if(s.isEmpty()) return ""
+              return try{
+                val b=Base64.decode(s,Base64.NO_WRAP); val c=Cipher.getInstance("AES/GCM/NoPadding")
+                c.init(Cipher.DECRYPT_MODE,key(),GCMParameterSpec(128,b,0,12)); String(c.doFinal(b,12,b.size-12))
+              }catch(e:Exception){ "" }
+            }
+          }
+
+          class SessionExpired:Exception("Session expired")
+
+          /** LuxPower / EG4 cloud monitoring API (same endpoints as the web portal). Field names and scaling follow the pylxpweb documentation. */
+          object LuxCloud{
+            private var cookie=""; private var loginAt=0L
+            private var energy:JSONObject?=null; private var energyAt=0L
+            private var bat:JSONObject?=null; private var batAt=0L
+            private fun base(sp:SharedPreferences)=sp.getString("lcu","https://server.luxpowertek.com")!!.trim().trimEnd('/')
+            private fun enc(s:String)=URLEncoder.encode(s,"UTF-8")
+
+            private fun call(sp:SharedPreferences,path:String,body:String,isLogin:Boolean=false):JSONObject{
+              val c=URL(base(sp)+path).openConnection() as HttpURLConnection
+              c.requestMethod="POST"; c.connectTimeout=10000; c.readTimeout=15000; c.doOutput=true
+              c.setRequestProperty("Content-Type","application/x-www-form-urlencoded; charset=UTF-8")
+              c.setRequestProperty("Accept","application/json"); c.setRequestProperty("User-Agent","Mozilla/5.0 (compatible; LuxMonitor/1.0)")
+              if(!isLogin&&cookie.isNotEmpty()) c.setRequestProperty("Cookie",cookie)
+              c.outputStream.use{ it.write(body.toByteArray()) }
+              val code=c.responseCode
+              if(isLogin){
+                val sc=c.headerFields.entries.firstOrNull{ it.key!=null&&it.key.equals("Set-Cookie",true) }?.value
+                sc?.firstOrNull{ it.startsWith("JSESSIONID") }?.let{ cookie=it.substringBefore(";") } }
+              val txt=(if(code in 200..299) c.inputStream else c.errorStream)?.bufferedReader()?.readText()?:""
+              if(code==401||code==403) throw SessionExpired()
+              if(code !in 200..299) error("Cloud HTTP $code")
+              return JSONObject(txt)
+            }
+            private fun login(sp:SharedPreferences){
+              cookie=""
+              val u=sp.getString("lcn","")!!.trim(); val p=Vault.dec(sp.getString("lcp","")!!)
+              require(u.isNotEmpty()&&p.isNotEmpty()){"Enter your cloud username and password in Settings"}
+              val j=call(sp,"/WManage/api/login","account="+enc(u)+"&password="+enc(p),true)
+              if(!j.optBoolean("success",false)) error("Cloud login failed: "+j.optString("message",j.optString("msg","check username, password and server")))
+              if(cookie.isEmpty()) error("Cloud login gave no session")
+              loginAt=System.currentTimeMillis()
+            }
+            private fun api(sp:SharedPreferences,path:String,sn:String):JSONObject{
+              if(cookie.isEmpty()||System.currentTimeMillis()-loginAt>100*60000L) login(sp)
+              var j=try{ call(sp,path,"serialNum="+sn) }catch(e:SessionExpired){ login(sp); call(sp,path,"serialNum="+sn) }
+              if(!j.optBoolean("success",true)){
+                login(sp); j=call(sp,path,"serialNum="+sn)
+                if(!j.optBoolean("success",true)) error("Cloud: "+j.optString("message",j.optString("msg","request failed"))) }
+              return j
+            }
+
+            fun poll(sp:SharedPreferences):Lux{
+              val sn=sp.getString("s","")!!.trim()
+              require(sn.isNotEmpty()){"Enter the inverter serial in Settings"}
+              val r=api(sp,"/WManage/api/inverter/getInverterRuntime",sn)
+              if(r.optBoolean("lost",false)) error("The cloud reports the inverter as offline")
+              val now=System.currentTimeMillis()
+              if(energy==null||now-energyAt>300000L){ energy=runCatching{ api(sp,"/WManage/api/inverter/getInverterEnergyInfo",sn) }.getOrNull()?:energy; energyAt=now }
+              if(bat==null||now-batAt>600000L){ bat=runCatching{ api(sp,"/WManage/api/battery/getBatteryInfo",sn) }.getOrNull()?:bat; batAt=now }
+              val e=energy; val b=bat
+              fun ed(k:String)=(e?.optDouble(k,0.0)?:0.0)/10.0
+              val p1=r.optInt("ppv1"); val p2=r.optInt("ppv2"); val p3=r.optInt("ppv3")
+              val pv=if(r.optInt("ppv")>0) r.optInt("ppv") else p1+p2+p3
+              val toUser=r.optInt("pToUser"); val toGrid=r.optInt("pToGrid"); val peps=r.optInt("peps")
+              val status=r.optInt("status")
+              val calc=maxOf(0,toUser+r.optInt("pinv")+peps-r.optInt("prec")-toGrid)
+              val c114=r.optInt("consumptionPower114",0)
+              val load=if(status==64) peps else if(r.has("consumptionPower114")&&!(c114==0&&calc>300)) c114 else calc
+              var cMax=0.0; var cMin=0.0; var tMax=0.0; var tMin=0.0; var soh=0; var cyc=0
+              val arr=b?.optJSONArray("batteryArray")
+              if(arr!=null&&arr.length()>0){
+                var mx=0.0; var mn=1e9; var tmx=-1e9; var tmn=1e9; var sh=101; var cy=0
+                for(k in 0 until arr.length()){
+                  val o=arr.getJSONObject(k)
+                  fun dv(a:String,c2:String)=if(o.has(a)) o.optDouble(a,0.0) else o.optDouble(c2,0.0)
+                  mx=maxOf(mx,dv("batMaxCellVoltage","cellVoltageMax")/1000.0)
+                  val mi=dv("batMinCellVoltage","cellVoltageMin")/1000.0; if(mi>0) mn=minOf(mn,mi)
+                  tmx=maxOf(tmx,dv("batMaxCellTemp","temperature")/10.0); tmn=minOf(tmn,dv("batMinCellTemp","temperature")/10.0)
+                  sh=minOf(sh,o.optInt("soh",100)); cy=maxOf(cy,o.optInt("cycleCnt",o.optInt("cycleCount",0))) }
+                cMax=mx; cMin=if(mn>1e8) 0.0 else mn; tMax=if(tmx<-1e8) 0.0 else tmx; tMin=if(tmn>1e8) 0.0 else tmn; soh=if(sh>100) 0 else sh; cyc=cy }
+              val yld=ed("todayYielding"); val imp=ed("todayImport"); val exp=ed("todayExport"); val chg=ed("todayCharging"); val dis=ed("todayDischarging")
+              return Lux(soc=r.optInt("soc"),vBat=r.optDouble("vBat",0.0)/10.0,pv=pv,charge=r.optInt("pCharge"),discharge=r.optInt("pDisCharge"),
+                gridIn=toUser,gridOut=toGrid,load=load,vGrid=r.optDouble("vacr",0.0)/10.0,fGrid=r.optDouble("fac",0.0)/100.0,
+                yld=yld,cons=if(e?.has("todayUsage")==true) ed("todayUsage") else maxOf(0.0,yld+imp+dis-exp-chg),
+                chgDay=chg,dischgDay=dis,impDay=imp,expDay=exp,state=status,tInv=r.optDouble("tinner",0.0),tBat=r.optDouble("tBat",0.0),
+                cellMaxV=cMax,cellMinV=cMin,cellTMax=tMax,cellTMin=tMin,cycles=cyc,soh=soh,
+                totGen=ed("totalYielding"),totExp=ed("totalExport"),totImp=ed("totalImport"),totChg=ed("totalCharging"),totDis=ed("totalDischarging"),
+                pv1=p1,pv2=p2,pv3=p3,vEps=r.optDouble("vepsr",0.0)/10.0)
+            }
+            fun test(sp:SharedPreferences):String{
+              cookie=""; energy=null; bat=null
+              val x=poll(sp)
+              return "Logged in. Battery ${x.soc}%, solar ${x.pv} W, load ${x.load} W, today's yield ${"%.1f".format(x.yld)} kWh."
+            }
+          }
+
+          @Composable fun LuxCloudCard(sp:SharedPreferences){
+            val scope=rememberCoroutineScope()
+            var pw by remember{mutableStateOf("")}
+            var msg by remember{mutableStateOf("")}
+            val saved=Vault.dec(sp.getString("lcp","")!!).isNotEmpty()
+            Card(Modifier.fillMaxWidth(),shape=RoundedCornerShape(14.dp),colors=CardDefaults.cardColors(containerColor=CARD)){
+              Column(Modifier.padding(12.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){
+                Text("Remote access: LuxPower cloud",fontSize=13.sp,fontWeight=FontWeight.SemiBold,color=WHITE)
+                Text("Used automatically when the local dongle can't be reached, for example when you are away from home. Your login is stored encrypted on this phone. Data is slightly delayed and polled at most every 30 seconds. Uses the inverter serial entered above.",fontSize=11.sp,color=DIM)
+                PrefField(sp,"lcu","LuxPower server","https://server.luxpowertek.com")
+                PrefField(sp,"lcn","Cloud username","")
+                OutlinedTextField(pw,{ pw=it; if(it.isNotEmpty()) sp.edit().putString("lcp",Vault.enc(it)).apply() },
+                  label={Text(if(saved) "Cloud password (saved, type to change)" else "Cloud password")},singleLine=true,
+                  visualTransformation=PasswordVisualTransformation(),modifier=Modifier.fillMaxWidth())
+                OutlinedButton({ scope.launch(Dispatchers.IO){ msg=try{ LuxCloud.test(sp) }catch(e:Exception){ "Failed: "+(e.message?:e.toString()) } } },Modifier.fillMaxWidth()){Text("Test cloud login")}
+                if(msg.isNotEmpty()) Text(msg,fontSize=12.sp,color=WHITE) } }
+          }
+          EOF
+          cat > app/src/main/java/com/lux/monitor/MainActivity.kt <<'EOF'
+          package com.lux.monitor
+          import android.content.Intent
+          import androidx.activity.compose.rememberLauncherForActivityResult
+          import androidx.activity.result.contract.ActivityResultContracts
+          import androidx.compose.ui.text.style.TextAlign
+          import java.time.LocalDate
+          import java.time.temporal.ChronoUnit
+          import android.content.SharedPreferences
+          import android.provider.Settings
+          import android.os.Bundle
+          import androidx.activity.ComponentActivity
+          import androidx.activity.compose.setContent
+          import androidx.compose.animation.core.*
+          import androidx.compose.foundation.Canvas
+          import androidx.compose.foundation.background
+          import androidx.compose.foundation.clickable
+          import androidx.compose.foundation.layout.*
+          import androidx.compose.foundation.rememberScrollState
+          import androidx.compose.foundation.shape.RoundedCornerShape
+          import androidx.compose.foundation.verticalScroll
+          import androidx.compose.material3.*
+          import androidx.compose.runtime.*
+          import androidx.compose.ui.Alignment
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.draw.clip
+          import androidx.compose.ui.geometry.CornerRadius
+          import androidx.compose.ui.geometry.Offset
+          import androidx.compose.ui.geometry.Size
+          import androidx.compose.ui.graphics.*
+          import androidx.compose.ui.graphics.drawscope.DrawScope
+          import androidx.compose.ui.graphics.drawscope.Stroke
+          import androidx.compose.ui.graphics.drawscope.withTransform
+          import androidx.compose.ui.graphics.vector.PathParser
+          import androidx.compose.ui.platform.LocalContext
+          import androidx.compose.ui.text.TextMeasurer
+          import androidx.compose.ui.text.TextStyle
+          import androidx.compose.ui.text.drawText
+          import androidx.compose.ui.text.font.FontFamily
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.text.rememberTextMeasurer
+          import androidx.compose.ui.unit.Dp
+          import androidx.compose.ui.platform.LocalConfiguration
+          import androidx.compose.ui.unit.dp
+          import androidx.compose.ui.unit.sp
+          import androidx.lifecycle.ViewModel
+          import androidx.lifecycle.viewModelScope
+          import androidx.lifecycle.viewmodel.compose.viewModel
+          import kotlinx.coroutines.*
+
+          class Vm:ViewModel()
+
+          class MainActivity:ComponentActivity(){
+            override fun onCreate(b:Bundle?){super.onCreate(b)
+              val sp=getSharedPreferences("c",0)
+              History.init(this); Daily.init(this); Monthly.init(this)
+              if(android.os.Build.VERSION.SDK_INT>=33) requestPermissions(arrayOf("android.permission.POST_NOTIFICATIONS"),1)
+              setContent{MaterialTheme(colorScheme=darkColorScheme()){Surface(Modifier.fillMaxSize(),color=BG){Screen(viewModel(),sp)}}}}
+          }
+
+          val BG=Color(0xFF070B10); val CARD=Color(0xFF0C131B); val LINE=Color(0xFF1B2836); val DIM=Color(0xFF9AA8BA); val WHITE=Color(0xFFE6EDF5)
+          val AMBER=Color(0xFFFBBF24); val CYAN=Color(0xFF22D3EE); val BLUE=Color(0xFF60A5FA); val GREEN=Color(0xFF34D399)
+          val VIOLET=Color(0xFFA78BFA); val PINK=Color(0xFFF472B6); val RED=Color(0xFFEF5350)
+          fun kw(w:Int)=if(w>=1000) "%.2f kW".format(w/1000.0) else "$w W"
+          fun ip(d:String)=PathParser().parsePathString(d).toPath()
+          val I_SOL=ip("M4 15 L7 6 H21 L18 15 Z M12 6 L9.5 15 M16.5 6 L14 15 M5.5 10.5 H19.5 M12 15 V20 M8 20 H16")
+          val I_GRID=ip("M12 2 L6.5 21 M12 2 L17.5 21 M5 6 H19 M8.8 9 H15.2 M7.6 14 H16.4 M8.8 9 L16.4 14 M15.2 9 L7.6 14")
+          val I_HOME=ip("M3.5 11 L12 4 L20.5 11 M6 9.5 V20 H18 V9.5 M10 20 V14 H14 V20")
+          val I_BAT=ip("M5 7 H17 A2 2 0 0 1 19 9 V15 A2 2 0 0 1 17 17 H5 A2 2 0 0 1 3 15 V9 A2 2 0 0 1 5 7 Z M19 10.5 H21.5 V13.5 H19 M6.5 10.5 V13.5 M10 10.5 V13.5 M13.5 10.5 V13.5")
+          val I_INV=ip("M5 3 H19 A2 2 0 0 1 21 5 V19 A2 2 0 0 1 19 21 H5 A2 2 0 0 1 3 19 V5 A2 2 0 0 1 5 3 Z M6 12 C8 7 10 7 12 12 S16 17 18 12")
+          val I_RUN=ip("M3 12 a9 9 0 1 0 18 0 a9 9 0 1 0 -18 0 M12 7 V12 L15.5 14")
+          val I_TMP=ip("M10 14.5 V5 A2 2 0 0 1 14 5 V14.5 A4 4 0 1 1 10 14.5 Z")
+          val I_EXTRA=ip("M4 4 H10 V10 H4 Z M14 4 H20 V10 H14 Z M4 14 H10 V20 H4 Z M14 14 H20 V20 H14 Z")
+          val I_LIVE=ip("M3 12 H7 L9.5 6 L13 18 L15.5 12 H21")
+          val I_HIS=ip("M3 20 H21 M5 16 L10 10 L14 13 L20 5")
+          val I_SET=ip("M4 8 H20 M4 16 H20 M11.2 8 a2.2 2.2 0 1 0 -4.4 0 a2.2 2.2 0 1 0 4.4 0 M17.2 16 a2.2 2.2 0 1 0 -4.4 0 a2.2 2.2 0 1 0 4.4 0")
+
+          fun DrawScope.icon(p:Path,col:Color,c:Offset,s:Float,glow:Boolean=true){
+            withTransform({translate(c.x-s/2,c.y-s/2);scale(s/24f,s/24f,Offset.Zero)}){
+              if(glow) drawPath(p,col.copy(alpha=.3f),style=Stroke(4.5f,cap=StrokeCap.Round,join=StrokeJoin.Round))
+              drawPath(p,col,style=Stroke(1.9f,cap=StrokeCap.Round,join=StrokeJoin.Round)) }
+          }
+          fun DrawScope.label(tm:TextMeasurer,s:String,x:Float,y:Float,px:Float,col:Color,mono:Boolean=false,bold:Boolean=false,center:Boolean=false){
+            val m=tm.measure(s,TextStyle(color=col,fontSize=px.toSp(),fontFamily=if(mono) FontFamily.Monospace else FontFamily.Default,fontWeight=if(bold) FontWeight.Bold else FontWeight.Normal))
+            drawText(m,topLeft=Offset(if(center) x-m.size.width/2f else x,y-m.size.height/2f))
+          }
+          @Composable fun Ico(p:Path,c:Color,s:Int=16,glow:Boolean=true){ Canvas(Modifier.size(s.dp)){ icon(p,c,Offset(size.width/2,size.height/2),size.width,glow) } }
+
+          @Composable fun Hero(x:Lux,rt:String){
+            val t by rememberInfiniteTransition(label="f").animateFloat(0f,1f,infiniteRepeatable(tween(900,easing=LinearEasing)),label="p")
+            val tm=rememberTextMeasurer()
+            Canvas(Modifier.fillMaxWidth().aspectRatio(358f/290f)){
+              val k=size.width/358f
+              fun P(a:Float,b:Float)=Offset(a*k,b*k)
+              fun flow(a:Offset,b:Offset,on:Boolean,col:Color)=drawLine(if(on) col else Color(0xFF2A3440),a,b,3f*k,
+                pathEffect=if(on) PathEffect.dashPathEffect(floatArrayOf(4*k,6*k),(1f-t)*10*k) else null)
+              fun pill(px:Float,py:Float,w:Float,h:Float,col:Color,fill:Color,ic:Path,lab:String,v:String,sub:String,tx:Float,vs:Float){
+                drawRoundRect(fill,P(px,py),Size(w*k,h*k),CornerRadius(14*k))
+                drawRoundRect(col.copy(alpha=.6f),P(px,py),Size(w*k,h*k),CornerRadius(14*k),style=Stroke(k))
+                icon(ic,col,P(px+20,py+h/2),22*k)
+                label(tm,lab,tx*k,(py+13)*k,9*k,col); label(tm,v,tx*k,(py+31)*k,vs*k,WHITE,mono=true,bold=true); label(tm,sub,tx*k,(py+51)*k,8.5f*k,DIM,mono=true) }
+              val c=P(179f,150f)
+              flow(P(179f,68f),P(179f,90f),x.pv>20,AMBER)
+              if(x.gridOut>20) flow(P(119f,150f),P(100f,150f),true,CYAN) else flow(P(100f,150f),P(119f,150f),x.gridIn>20,BLUE)
+              flow(P(239f,150f),P(258f,150f),x.load>20,VIOLET)
+              drawCircle(Color(0xFF17212C),60*k,c,style=Stroke(10*k))
+              drawArc(Brush.linearGradient(if(x.soc>20) listOf(CYAN,GREEN) else listOf(AMBER,RED),P(119f,90f),P(239f,210f)),-90f,360f*x.soc/100f,false,
+                c-Offset(60*k,60*k),Size(120*k,120*k),style=Stroke(10*k,cap=StrokeCap.Round))
+              drawCircle(Color(0xFF0A1017),46*k,c); drawCircle(LINE,46*k,c,style=Stroke(k))
+              icon(I_BAT,GREEN,P(179f,116f),16*k)
+              label(tm,"${x.soc}%",179*k,141*k,28*k,WHITE,mono=true,bold=true,center=true)
+              val st=if(x.charge>20) "CHARGING "+kw(x.charge) else if(x.discharge>20) "DISCHARGING "+kw(x.discharge) else "IDLE \u00B7 0 W"
+              label(tm,st,179*k,167*k,9*k,GREEN,center=true)
+              val gs="${x.vGrid.toInt()}V ${"%.1f".format(x.fGrid)}Hz"
+              pill(84f,2f,190f,66f,AMBER,Color(0xFF16130A),I_SOL,"SOLAR  (S1 \u00B7 S2 \u00B7 S3)",kw(x.pv),"${x.pv1} \u00B7 ${x.pv2} \u00B7 ${x.pv3} W",126f,18f)
+              if(x.gridOut>20||x.gridIn<=20) pill(2f,118f,98f,64f,CYAN,Color(0xFF08161B),I_GRID,"EXPORT",kw(x.gridOut),gs,34f,14f)
+              else pill(2f,118f,98f,64f,BLUE,Color(0xFF08121F),I_GRID,"IMPORT",kw(x.gridIn),gs,34f,14f)
+              pill(258f,118f,98f,64f,VIOLET,Color(0xFF130F1F),I_HOME,"HOME",kw(x.load),if(x.vEps>0) "${x.vEps.toInt()} V" else "\u2013 V",290f,14f)
+              drawRoundRect(Color(0xFF0A1017),P(59f,232f),Size(240*k,46*k),CornerRadius(23*k))
+              drawRoundRect(LINE,P(59f,232f),Size(240*k,46*k),CornerRadius(23*k),style=Stroke(k))
+              icon(I_RUN,GREEN,P(88f,255f),22*k)
+              label(tm,"RUNTIME AT LOAD \u00B7 NO PV",196*k,243*k,9*k,DIM,center=true)
+              label(tm,rt,196*k,262*k,15*k,GREEN,mono=true,bold=true,center=true)
+            }
+          }
+
+          @Composable fun Section(title:String,ic:Path,col:Color,expanded:Boolean=false,summary:String="",content:@Composable ColumnScope.()->Unit){
+            var o by remember{mutableStateOf(expanded)}
+            Card(Modifier.fillMaxWidth(),shape=RoundedCornerShape(20.dp),colors=CardDefaults.cardColors(containerColor=CARD)){
+              Column(Modifier.padding(12.dp)){
+                Row(Modifier.fillMaxWidth().clickable{o=!o},Arrangement.SpaceBetween,Alignment.CenterVertically){
+                  Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)){ Ico(ic,col,18); Text(title,fontSize=12.sp,letterSpacing=1.5.sp,fontWeight=FontWeight.Bold,color=WHITE) }
+                  Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)){
+                    if(!o&&summary.isNotEmpty()) Text(summary,fontSize=11.sp,fontFamily=FontFamily.Monospace,color=WHITE)
+                    Text(if(o) "\u25BE" else "\u25B8",color=DIM) } }
+                if(o){ Spacer(Modifier.height(10.dp)); content() } } }
+          }
+          @Composable fun Kpi(label:String,v:Double,col:Color,ic:Path,mod:Modifier,unit:String="kWh",dec:Int=1){
+            Card(mod,shape=RoundedCornerShape(14.dp),colors=CardDefaults.cardColors(containerColor=Color(0xFF0A0E12))){
+              Column{ Column(Modifier.padding(8.dp,10.dp)){
+                Row(Modifier.fillMaxWidth(),Arrangement.SpaceBetween,Alignment.CenterVertically){ Text(label,fontSize=9.sp,color=DIM); Ico(ic,col,14) }
+                Text("%.${dec}f".format(v),fontSize=18.sp,fontFamily=FontFamily.Monospace,fontWeight=FontWeight.Bold,color=WHITE,modifier=Modifier.padding(top=6.dp)); Text(unit,fontSize=10.sp,color=DIM) }
+                Box(Modifier.fillMaxWidth().height(3.dp).background(col)) } }
+          }
+          @Composable fun Ratio(label:String,f:Float,col:Color,ic:Path,mod:Modifier){
+            val fr=f.coerceIn(0f,1f)
+            Card(mod,shape=RoundedCornerShape(14.dp),colors=CardDefaults.cardColors(containerColor=Color(0xFF0A0E12))){
+              Column(Modifier.padding(12.dp,10.dp)){
+                Row(Modifier.fillMaxWidth(),Arrangement.SpaceBetween,Alignment.CenterVertically){ Text(label,fontSize=9.sp,color=DIM); Ico(ic,col,14) }
+                Text("${(fr*100).toInt()}%",fontSize=22.sp,fontFamily=FontFamily.Monospace,fontWeight=FontWeight.Bold,color=col)
+                Box(Modifier.padding(top=6.dp).fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)).background(Color(0xFF17212C))){
+                  Box(Modifier.fillMaxWidth(maxOf(fr,0.01f)).fillMaxHeight().background(col)) } } }
+          }
+
+          val CSER=listOf("Solar" to AMBER,"Battery" to GREEN,"Grid" to CYAN,"Load" to VIOLET,"SOC" to PINK)
+          val DS:List<List<Float>> = run{
+            val sol=ArrayList<Float>();val bat=ArrayList<Float>();val grd=ArrayList<Float>();val con=ArrayList<Float>();val soc=ArrayList<Float>()
+            var s=30f
+            for(i in 0 until 96){
+              val so=if(i in 24..72) 7000f*kotlin.math.sin(Math.PI.toFloat()*(i-24)/48f) else 0f
+              val c=800f+300f*kotlin.math.sin(i/6f); val b=if(so>c) minOf(2800f,so-c) else 0f
+              sol.add(so);con.add(c);bat.add(b);grd.add(so-c-b); s=minOf(100f,s+b/3000f); soc.add(s) }
+            listOf(sol,bat,grd,con,soc)
+          }
+
+          @Composable fun Chart(d:List<List<Float>>,ht:Dp=210.dp){
+            val tm=rememberTextMeasurer()
+            Canvas(Modifier.fillMaxWidth().height(ht)){
+              val h=size.height; val w=size.width; val pl=30.dp.toPx(); val pr=32.dp.toPx(); val pw=w-pl-pr
+              val mx=d.take(4).maxOf{it.maxOrNull()?:0f}; val mn=d.take(4).minOf{it.minOrNull()?:0f}
+              val step=if(mx>12000f) 4000f else 2000f
+              val hi=maxOf(step,kotlin.math.ceil(mx/step)*step); val lo=if(mn<0f) kotlin.math.floor(mn/step)*step else 0f
+              fun yP(v:Float)=h-(v-lo)/(hi-lo)*h
+              fun lab(s:String,x:Float,y:Float,col:Color,right:Boolean){
+                val t=tm.measure(s,TextStyle(color=col,fontSize=9.sp,fontFamily=FontFamily.Monospace))
+                drawText(t,topLeft=Offset(if(right) x else x-t.size.width,(y-t.size.height/2f).coerceIn(0f,h-t.size.height))) }
+              var v=lo
+              while(v<=hi+1f){ val y=yP(v)
+                drawLine(if(v==0f) Color(0xFF3A4A5E) else Color(0xFF1B2836),Offset(pl,y),Offset(pl+pw,y),1.dp.toPx(),pathEffect=if(v==0f) null else PathEffect.dashPathEffect(floatArrayOf(6f,8f)))
+                lab("%.0f".format(v/1000f),pl-4.dp.toPx(),y,DIM,false); v+=step }
+              for(s in intArrayOf(0,50,100)) lab("$s%",pl+pw+4.dp.toPx(),h-s/100f*h,PINK,true)
+              val zy=yP(0f)
+              d.forEachIndexed{k,vs-> if(vs.size>1){
+                val path=Path()
+                vs.forEachIndexed{i,y->
+                  val py=if(k==4) h-y/100f*h else yP(y); val px=pl+pw*i/(vs.size-1)
+                  if(i==0) path.moveTo(px,py) else path.lineTo(px,py) }
+                if(k==0){ val f=Path(); f.addPath(path); f.lineTo(pl+pw,zy); f.lineTo(pl,zy); f.close(); drawPath(f,AMBER.copy(alpha=.2f)) }
+                drawPath(path,CSER[k].second,style=if(k==4) Stroke(1.5.dp.toPx(),pathEffect=PathEffect.dashPathEffect(floatArrayOf(14f,10f))) else Stroke(2.dp.toPx(),cap=StrokeCap.Round,join=StrokeJoin.Round)) } }
+            }
+          }
+
+          @Composable fun Legend(d:List<List<Float>>,note:Boolean=true){
+            Row(Modifier.fillMaxWidth().padding(top=10.dp),Arrangement.SpaceBetween){
+              CSER.forEachIndexed{k,e->
+                val v=d[k].lastOrNull()
+                Column(horizontalAlignment=Alignment.CenterHorizontally){
+                  Text("\u25CF "+e.first,fontSize=11.sp,color=e.second)
+                  Text(if(v==null) "\u2013" else if(k==4) "${v.toInt()}%" else "%.2f kW".format(v/1000f),fontSize=11.sp,fontFamily=FontFamily.Monospace,color=WHITE) } } }
+            if(note) Text("Left axis: kW (solar, battery, grid, load). Right axis: battery %. Battery + = charging, \u2212 = discharging. Grid + = export, \u2212 = import.",fontSize=11.sp,color=DIM,modifier=Modifier.padding(top=8.dp))
+          }
+
+          fun timeLabels(range:Int):List<String>{
+            val n=System.currentTimeMillis()
+            val (ms,fmt)=when(range){0->3600000L to "HH:mm";1->86400000L to "EEE HH:mm";else->7*86400000L to "EEE d"}
+            val f=java.text.SimpleDateFormat(fmt,java.util.Locale.getDefault())
+            return listOf(f.format(java.util.Date(n-ms)),f.format(java.util.Date(n-ms/2)),"now")
+          }
+
+          fun stateText(s:Int)=when(s){0,17->"Standby";1->"Fault";2->"Updating";4->"PV powering load, exporting surplus"
+            8->"PV powering load & charging battery";12->"PV powering load, charging battery & exporting";16->"Battery discharging to load, exporting surplus"
+            20->"PV & battery powering load, exporting surplus";32->"Grid charging battery";40->"Grid & PV charging battery";64->"Off-grid: battery powering load"
+            96->"Off-grid: AC-coupled PV charging battery";136->"Off-grid: PV powering load & charging battery";192->"Off-grid: PV & battery powering load";else->"State $s"}
+          fun chartData(range:Int):List<List<Float>>{
+            val src:List<Pt> = if(range==0) Store.series.map{Pt(0,it.pv,it.charge-it.discharge,it.gridOut-it.gridIn,it.load,it.soc)}
+              else { val cut=System.currentTimeMillis()-(if(range==1) 86400000L else 7*86400000L); History.pts.filter{it.t>=cut} }
+            val st=maxOf(1,src.size/240); val s=src.filterIndexed{i,_->i%st==0}
+            return listOf(s.map{it.pv.toFloat()},s.map{it.bat.toFloat()},s.map{it.grid.toFloat()},s.map{it.load.toFloat()},s.map{it.soc.toFloat()})
+          }
+          fun hm(h:Double)=if(h>99) "99h+" else "${h.toInt()}h ${((h-h.toInt())*60).toInt()}m"
+          val DEMO=listOf(
+            "Sunny" to Lux(100,53.6,7377,0,0,0,6465,766,pv1=2900,pv2=2500,pv3=1977,vEps=230.0),
+            "Evening" to Lux(48,51.9,300,0,1900,0,0,2200,pv1=100,pv2=100,pv3=100,vEps=230.0),
+            "Night" to Lux(18,50.6,0,0,0,900,0,900,vEps=230.0),
+            "Charging" to Lux(35,51.4,0,3000,0,3900,0,900,vEps=230.0))
+          fun demoRt(x:Lux)=if(x.charge>x.discharge+50) "Full in "+hm(15360.0*(100-x.soc)/100/x.charge)
+            else hm(15360.0*maxOf(0,x.soc-10)/100*0.94/maxOf(50,x.load))
+
+          @Composable fun NavItem(label:String,ic:Path,act:Boolean,mod:Modifier,onClick:()->Unit){
+            val c=if(act) CYAN else DIM
+            Column(mod.clickable(onClick=onClick).padding(vertical=8.dp),horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(4.dp)){
+              Ico(ic,c,22,act); Text(label,fontSize=11.sp,color=c,fontWeight=if(act) FontWeight.Bold else FontWeight.Normal) }
+          }
+
+          @Composable fun Screen(vm:Vm,sp:SharedPreferences){
+            var host by remember{mutableStateOf(sp.getString("h","")!!)}
+            var dl by remember{mutableStateOf(sp.getString("d","")!!)}
+            var sn by remember{mutableStateOf(sp.getString("s","")!!)}
+            var cap by remember{mutableStateOf(sp.getString("c","15.36")!!)}
+            var res by remember{mutableStateOf(sp.getString("r","10")!!)}
+            var alr by remember{mutableStateOf(sp.getString("a","20")!!)}
+            var pint by remember{mutableStateOf(sp.getString("pi","10")!!)}
+            var xa by remember{mutableStateOf(sp.getString("xa","0")=="1")}
+            var rimp by remember{mutableStateOf(sp.getString("ri","0.25")!!)}
+            var rexp by remember{mutableStateOf(sp.getString("re","0.10")!!)}
+            var cur by remember{mutableStateOf(sp.getString("cu","$")!!)}
+            var range by remember{mutableStateOf(0)}
+            var latS by remember{mutableStateOf(sp.getString("lat","")!!)}
+            var lonS by remember{mutableStateOf(sp.getString("lon","")!!)}
+            var kwpS by remember{mutableStateOf(sp.getString("kwp","10")!!)}
+            var fcKey by remember{mutableStateOf(0)}
+            var wall by remember{mutableStateOf(false)}
+
+            var dFrom by remember{mutableStateOf(LocalDate.now().withDayOfMonth(1).toString())}
+            var dTo by remember{mutableStateOf(LocalDate.now().toString())}
+            var tab by remember{mutableStateOf(0)}
+            var sel by remember{mutableStateOf(0)}
+            val ctx=LocalContext.current
+            val pick=rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()){ uri->
+              if(uri!=null) android.widget.Toast.makeText(ctx,Monthly.importCsv(ctx,uri),android.widget.Toast.LENGTH_LONG).show() }
+            LaunchedEffect(fcKey){
+              val la=sp.getString("lat","")!!.trim(); val lo=sp.getString("lon","")!!.trim()
+              val got=if(la.isEmpty()||lo.isEmpty()) null else withContext(Dispatchers.IO){ runCatching{fetchForecast(la,lo)}.getOrNull() }
+              if(got!=null||la.isEmpty()) Store.fc=got }
+            LaunchedEffect(Unit){ startMonitor(ctx) }
+            val live=Store.d
+            Box(Modifier.fillMaxSize()){
+            Column(Modifier.fillMaxSize().statusBarsPadding()){
+              val brand=sp.getString("brand","LuxPower")!!.ifBlank{"LuxPower"}; val model=sp.getString("model","LXP-LB-EU 12K")!!
+              val srcLabel=when(Store.via){ "local"->"LOCAL"; "cloud"->"CLOUD"; else->"DEMO" }
+              val srcCol=when(Store.via){ "local"->GREEN; "cloud"->AMBER; else->DIM }
+              Row(Modifier.fillMaxWidth().padding(16.dp,12.dp),Arrangement.SpaceBetween,Alignment.CenterVertically){
+                Column{
+                  Text("LUX MONITOR",fontSize=10.sp,letterSpacing=3.sp,fontWeight=FontWeight.Bold,color=CYAN)
+                  Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)){
+                    Text(brand.uppercase(),fontSize=20.sp,letterSpacing=2.sp,fontWeight=FontWeight.Bold,color=WHITE)
+                    if(model.isNotBlank()) Box(Modifier.clip(RoundedCornerShape(8.dp)).background(Color(0xFF0F2A33)).padding(8.dp,3.dp)){
+                      Text(model,fontSize=11.sp,fontFamily=FontFamily.Monospace,fontWeight=FontWeight.Bold,color=CYAN) } } }
+                Row(Modifier.clip(RoundedCornerShape(14.dp)).background(CARD).padding(10.dp,6.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(6.dp)){
+                  Ico(I_LIVE,srcCol,16); Text(srcLabel,fontSize=11.sp,letterSpacing=1.sp,fontFamily=FontFamily.Monospace,fontWeight=FontWeight.Bold,color=srcCol) } }
+              Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal=16.dp),Arrangement.spacedBy(14.dp)){
+                if(tab==0){
+                  val x=live?:DEMO[sel].second
+                  val land=LocalConfiguration.current.orientation==android.content.res.Configuration.ORIENTATION_LANDSCAPE
+                  if(live==null){
+                    Text("Demo mode \u2013 add your inverter details in Settings to go live.",fontSize=13.sp,color=AMBER)
+                    Row(Modifier.fillMaxWidth(),Arrangement.spacedBy(6.dp)){ DEMO.forEachIndexed{i,d->
+                      Button({sel=i},Modifier.weight(1f),contentPadding=PaddingValues(2.dp),
+                        colors=ButtonDefaults.buttonColors(containerColor=if(i==sel) AMBER else CARD,contentColor=if(i==sel) Color.Black else WHITE)){Text(d.first,fontSize=12.sp)} } }
+                  }
+                  val rtx=if(live==null) demoRt(x) else Store.runtime
+                  if(land) LandscapeBoard(x,rtx) else Card(Modifier.fillMaxWidth(),shape=RoundedCornerShape(22.dp),colors=CardDefaults.cardColors(containerColor=CARD)){ Hero(x,rtx) }
+                  if(live!=null) Text(stateText(x.state),fontSize=12.sp,color=DIM)
+                  if(Store.err.isNotEmpty()) Text(Store.err,fontSize=12.sp,color=AMBER)
+                  val ri=rimp.toDoubleOrNull()?:0.0; val re=rexp.toDoubleOrNull()?:0.0
+                  if(!land){
+                  Section("DAILY ENERGY",I_SOL,AMBER,expanded=true){
+                    Row(Modifier.fillMaxWidth(),Arrangement.spacedBy(8.dp)){ Kpi("YIELD",x.yld,AMBER,I_SOL,Modifier.weight(1f)); Kpi("USED",x.cons,VIOLET,I_HOME,Modifier.weight(1f))
+                      Kpi("IMPORT",x.impDay,BLUE,I_GRID,Modifier.weight(1f)); Kpi("EXPORT",x.expDay,CYAN,I_GRID,Modifier.weight(1f)) }
+                    Spacer(Modifier.height(8.dp))
+                    Row(Modifier.fillMaxWidth(),Arrangement.spacedBy(8.dp)){
+                      Ratio("SELF-USE",if(x.yld>0) ((x.yld-x.expDay)/x.yld).toFloat() else 0f,VIOLET,I_HOME,Modifier.weight(1f))
+                      Ratio("AUTARKY",if(x.cons>0) (1-x.impDay/x.cons).toFloat() else 0f,CYAN,I_GRID,Modifier.weight(1f))
+                      Ratio("INV LOAD",x.load/12000f,GREEN,I_INV,Modifier.weight(1f)) }
+                    Text("Runtime = usable battery energy \u00F7 5-min average load, no PV.",fontSize=11.sp,color=DIM,modifier=Modifier.padding(top=8.dp))
+                  }
+                  Section("REAL-TIME POWER",I_HIS,CYAN,expanded=true){
+                    if(live!=null) Row(Modifier.fillMaxWidth().padding(bottom=8.dp),Arrangement.spacedBy(6.dp)){ listOf("1 h","24 h","7 d").forEachIndexed{i,t->
+                      Button({range=i},Modifier.weight(1f),contentPadding=PaddingValues(2.dp),
+                        colors=ButtonDefaults.buttonColors(containerColor=if(i==range) CYAN else Color(0xFF0A0E12),contentColor=if(i==range) Color.Black else WHITE)){Text(t,fontSize=12.sp)} } }
+                    val cd=if(live==null) DS else chartData(range)
+                    Chart(cd)
+                    val tl=if(live==null) listOf("00:00","12:00","24:00") else timeLabels(range)
+                    Row(Modifier.fillMaxWidth().padding(start=30.dp,end=32.dp,top=4.dp),Arrangement.SpaceBetween){ tl.forEach{Text(it,fontSize=10.sp,color=DIM)} }
+                    Legend(cd)
+                  }
+                  Section("BATTERY BANK",I_BAT,GREEN,expanded=true){
+                    Text("$cap kWh \u00B7 reserve $res% \u00B7 ${x.vBat} V",fontSize=12.sp,fontFamily=FontFamily.Monospace,color=DIM)
+                    Box(Modifier.padding(top=10.dp).fillMaxWidth().height(10.dp).clip(RoundedCornerShape(5.dp)).background(Color(0xFF17212C))){
+                      Box(Modifier.fillMaxWidth(maxOf(x.soc/100f,0.01f)).fillMaxHeight().background(Brush.horizontalGradient(listOf(CYAN,GREEN)))) }
+                    Text("Charge ${"%.1f".format(x.chgDay)} kWh \u00B7 discharge ${"%.1f".format(x.dischgDay)} kWh today",fontSize=11.sp,color=DIM,modifier=Modifier.padding(top=8.dp))
+                  }
+                  }
+                  val coords=sp.getString("lat","")!!.isNotBlank()&&sp.getString("lon","")!!.isNotBlank()
+                  val fsrc=Store.fc?:(if(!coords) sampleFc() else null)
+                  val fres=fsrc?.let{ forecast(it,kwpS.toDoubleOrNull()?:10.0) }
+                  val fsum=fres?.rows?.firstOrNull()?.let{ "Today "+"%.0f".format(it.prod)+" kWh \u00B7 net "+"%+.0f".format(it.net) }?:""
+                  Section("FORECAST",I_SOL,AMBER,summary=fsum){
+                    if(fres==null) Text("Loading forecast\u2026 (needs internet). Check latitude and longitude in Settings.",fontSize=12.sp,color=DIM)
+                    else{
+                      if(!coords) Text("Sample forecast \u2013 add your latitude and longitude in Settings.",fontSize=12.sp,color=AMBER,modifier=Modifier.padding(bottom=8.dp))
+                      val f=fres
+                      if(f.rows.size>=2){
+                        val nv={n:Double->(if(n<0) "-" else "")+cur+"%.0f".format(Math.abs(if(n>=0) n*re else n*ri))}
+                        Row(Modifier.fillMaxWidth(),Arrangement.spacedBy(8.dp)){
+                          Kpi("TODAY NET",f.rows[0].net,if(f.rows[0].net>=0) CYAN else RED,I_GRID,Modifier.weight(1f),"kWh",1)
+                          Kpi("TOMORROW NET",f.rows[1].net,if(f.rows[1].net>=0) CYAN else RED,I_GRID,Modifier.weight(1f),"kWh",1)
+                          Kpi("7-DAY NET",f.rows.sumOf{it.net},if(f.rows.sumOf{it.net}>=0) CYAN else RED,I_GRID,Modifier.weight(1f),"kWh",0) }
+                        Spacer(Modifier.height(10.dp))
+                        val mp=maxOf(1.0,f.rows.maxOf{it.prod})
+                        Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){
+                          Text("Day",fontSize=10.sp,color=DIM,modifier=Modifier.width(52.dp)); Text("Production (kWh)",fontSize=10.sp,color=DIM,modifier=Modifier.weight(1f))
+                          Text("Net kWh",fontSize=10.sp,color=DIM,textAlign=TextAlign.End,modifier=Modifier.width(54.dp)); Text("Value",fontSize=10.sp,color=DIM,textAlign=TextAlign.End,modifier=Modifier.width(54.dp)) }
+                        f.rows.forEach{ r->
+                          Row(Modifier.fillMaxWidth().padding(vertical=4.dp),verticalAlignment=Alignment.CenterVertically){
+                            Text(LocalDate.parse(r.date).format(java.time.format.DateTimeFormatter.ofPattern("EEE d")),fontSize=11.sp,color=WHITE,modifier=Modifier.width(52.dp))
+                            Box(Modifier.weight(1f).height(6.dp).clip(RoundedCornerShape(3.dp)).background(Color(0xFF17212C))){ Box(Modifier.fillMaxWidth((r.prod/mp).toFloat().coerceIn(0.02f,1f)).fillMaxHeight().background(AMBER)) }
+                            Text("%.0f".format(r.prod),fontSize=11.sp,fontFamily=FontFamily.Monospace,color=AMBER,textAlign=TextAlign.End,modifier=Modifier.width(34.dp))
+                            Text("%+.0f".format(r.net),fontSize=11.sp,fontFamily=FontFamily.Monospace,color=if(r.net>=0) CYAN else RED,textAlign=TextAlign.End,modifier=Modifier.width(54.dp))
+                            Text(nv(r.net),fontSize=11.sp,fontFamily=FontFamily.Monospace,color=WHITE,textAlign=TextAlign.End,modifier=Modifier.width(54.dp)) } }
+                        if(live!=null) Text("Today so far: ${"%.1f".format(live.yld)} kWh of ${"%.0f".format(f.rows[0].prod)} forecast.",fontSize=12.sp,color=WHITE,modifier=Modifier.padding(top=8.dp))
+                        Text("Production = ${"%.1f".format(f.k)} kWh per kWh/m\u00B2 of sun (${f.note}${if(f.n>0) ", fit \u00B1"+(f.err*100).toInt()+"%" else ""}). Net export = production \u2212 typical use (${"%.0f".format(f.cons)} kWh/day) \u2212 battery charging (${"%.1f".format(f.bat)} kWh/day). The model re-learns as more days are recorded.",fontSize=11.sp,color=DIM,modifier=Modifier.padding(top=6.dp))
+                      }
+                    }
+                  }
+                  Section("BATTERY HEALTH",I_BAT,GREEN){
+                    Row(Modifier.fillMaxWidth(),Arrangement.spacedBy(8.dp)){
+                      Kpi("BAT TEMP",x.tBat,AMBER,I_TMP,Modifier.weight(1f),"\u00B0C",0); Kpi("INV TEMP",x.tInv,AMBER,I_TMP,Modifier.weight(1f),"\u00B0C",0)
+                      Kpi("SOH",x.soh.toDouble(),GREEN,I_BAT,Modifier.weight(1f),"%",0); Kpi("CYCLES",x.cycles.toDouble(),GREEN,I_BAT,Modifier.weight(1f),"cycles",0) }
+                    Spacer(Modifier.height(8.dp))
+                    Row(Modifier.fillMaxWidth(),Arrangement.spacedBy(8.dp)){
+                      Kpi("CELL MAX",x.cellMaxV,CYAN,I_BAT,Modifier.weight(1f),"V",3); Kpi("CELL MIN",x.cellMinV,CYAN,I_BAT,Modifier.weight(1f),"V",3)
+                      Kpi("DELTA",(x.cellMaxV-x.cellMinV)*1000,AMBER,I_BAT,Modifier.weight(1f),"mV",0) }
+                    Text("Cell temperature ${"%.1f".format(x.cellTMin)} to ${"%.1f".format(x.cellTMax)} \u00B0C",fontSize=11.sp,color=DIM,modifier=Modifier.padding(top=8.dp))
+                  }
+                  Section("BILL COMPARE",I_GRID,BLUE){
+                    Row(Modifier.fillMaxWidth().padding(bottom=8.dp),Arrangement.spacedBy(6.dp)){
+                      listOf("This month","Last month","Last 7 d","Last 30 d").forEachIndexed{i,t->
+                        OutlinedButton({ val n=LocalDate.now()
+                          when(i){ 0->{dFrom=n.withDayOfMonth(1).toString();dTo=n.toString()}
+                            1->{val lm=n.minusMonths(1);dFrom=lm.withDayOfMonth(1).toString();dTo=lm.withDayOfMonth(lm.lengthOfMonth()).toString()}
+                            2->{dFrom=n.minusDays(6).toString();dTo=n.toString()} else->{dFrom=n.minusDays(29).toString();dTo=n.toString()} } },
+                          Modifier.weight(1f),contentPadding=PaddingValues(2.dp)){Text(t,fontSize=11.sp)} } }
+                    Row(Modifier.fillMaxWidth(),Arrangement.spacedBy(8.dp)){
+                      OutlinedTextField(dFrom,{dFrom=it},label={Text("From (yyyy-mm-dd)")},singleLine=true,modifier=Modifier.weight(1f))
+                      OutlinedTextField(dTo,{dTo=it},label={Text("To")},singleLine=true,modifier=Modifier.weight(1f)) }
+                    val f=runCatching{LocalDate.parse(dFrom)}.getOrNull(); val t=runCatching{LocalDate.parse(dTo)}.getOrNull()
+                    if(f!=null&&t!=null&&!t.isBefore(f)){
+                      val r=period(f,t,ri,re); val s=r.s; val n=ChronoUnit.DAYS.between(f,t)+1
+                      Spacer(Modifier.height(8.dp))
+                      Row(Modifier.fillMaxWidth(),Arrangement.spacedBy(8.dp)){
+                        Kpi("IMPORT",s[2],BLUE,I_GRID,Modifier.weight(1f),"kWh",1); Kpi("EXPORT",s[3],CYAN,I_GRID,Modifier.weight(1f),"kWh",1); Kpi("NET IMPORT",s[2]-s[3],AMBER,I_GRID,Modifier.weight(1f),"kWh",1) }
+                      Spacer(Modifier.height(8.dp))
+                      Row(Modifier.fillMaxWidth(),Arrangement.spacedBy(8.dp)){
+                        Kpi("GENERATION",s[0],AMBER,I_SOL,Modifier.weight(1f),"kWh",1); Kpi("CONSUMPTION",s[1],VIOLET,I_HOME,Modifier.weight(1f),"kWh",1); Kpi("NET COST",s[6]-s[7],GREEN,I_SOL,Modifier.weight(1f),cur,2) }
+                      Text("Days counted: ${r.exact} exact"+(if(r.est>0) ", ${r.est} estimated from monthly totals" else "")+(if(r.miss>0) ", ${r.miss} with no data" else "")+". Cost uses your imported bill data where available.",fontSize=11.sp,color=DIM,modifier=Modifier.padding(top=8.dp))
+                    } else Text("Enter dates as yyyy-mm-dd, with the end on or after the start.",fontSize=11.sp,color=RED,modifier=Modifier.padding(top=8.dp))
+                  }
+                  Section("SAVINGS TODAY",I_SOL,GREEN){
+                    Row(Modifier.fillMaxWidth(),Arrangement.spacedBy(8.dp)){
+                      Kpi("SAVED",x.cons*ri-(x.impDay*ri-x.expDay*re),GREEN,I_SOL,Modifier.weight(1f),cur,2)
+                      Kpi("GRID COST",x.impDay*ri,BLUE,I_GRID,Modifier.weight(1f),cur,2)
+                      Kpi("EXPORT CREDIT",x.expDay*re,CYAN,I_GRID,Modifier.weight(1f),cur,2) }
+                    Text("Saved = what your consumption would cost at the import rate, minus grid cost, plus export credit. Set rates in Settings.",fontSize=11.sp,color=DIM,modifier=Modifier.padding(top=8.dp))
+                  }
+                  Section("ENERGY OVERVIEW (LIFETIME)",I_HIS,AMBER){
+                    Row(Modifier.fillMaxWidth(),Arrangement.spacedBy(8.dp)){
+                      Kpi("GENERATION",x.totGen,AMBER,I_SOL,Modifier.weight(1f),"kWh",0); Kpi("EXPORT",x.totExp,CYAN,I_GRID,Modifier.weight(1f),"kWh",0); Kpi("IMPORT",x.totImp,BLUE,I_GRID,Modifier.weight(1f),"kWh",0) }
+                    Spacer(Modifier.height(8.dp))
+                    Row(Modifier.fillMaxWidth(),Arrangement.spacedBy(8.dp)){
+                      Kpi("BAT CHARGE",x.totChg,GREEN,I_BAT,Modifier.weight(1f),"kWh",0); Kpi("BAT DISCHARGE",x.totDis,GREEN,I_BAT,Modifier.weight(1f),"kWh",0) }
+                  }
+                  Spacer(Modifier.height(4.dp))
+                } else if(tab==1){
+                  ExtrasTab(sp){wall=true}
+                } else {
+                  PrefField(sp,"brand","Brand shown on the main screen","LuxPower")
+                  PrefField(sp,"model","Model shown on the main screen","LXP-LB-EU 12K")
+                  OutlinedTextField(host,{host=it},label={Text("Dongle IP")},singleLine=true,modifier=Modifier.fillMaxWidth())
+                  OutlinedTextField(dl,{dl=it},label={Text("Dongle serial (10 chars)")},singleLine=true,modifier=Modifier.fillMaxWidth())
+                  OutlinedTextField(sn,{sn=it},label={Text("Inverter serial (10 chars)")},singleLine=true,modifier=Modifier.fillMaxWidth())
+                  OutlinedTextField(cap,{cap=it},label={Text("Battery kWh (3 \u00D7 5.12)")},singleLine=true,modifier=Modifier.fillMaxWidth())
+                  OutlinedTextField(res,{res=it},label={Text("Reserve SOC %")},singleLine=true,modifier=Modifier.fillMaxWidth())
+                  OutlinedTextField(alr,{alr=it},label={Text("Low-battery alert % (during outage)")},singleLine=true,modifier=Modifier.fillMaxWidth())
+                  OutlinedTextField(rimp,{rimp=it},label={Text("Import rate per kWh")},singleLine=true,modifier=Modifier.fillMaxWidth())
+                  OutlinedTextField(rexp,{rexp=it},label={Text("Export rate per kWh")},singleLine=true,modifier=Modifier.fillMaxWidth())
+                  OutlinedTextField(cur,{cur=it},label={Text("Currency symbol")},singleLine=true,modifier=Modifier.fillMaxWidth())
+                  OutlinedButton({android.widget.Toast.makeText(ctx,History.export(ctx),android.widget.Toast.LENGTH_LONG).show()},Modifier.fillMaxWidth()){Text("Export history to CSV")}
+                  PrefSwitch(sp,"wl","Keep Wi-Fi awake for a more stable connection (uses a little more battery)")
+                  OutlinedTextField(pint,{pint=it},label={Text("Polling interval in seconds (10 to 60)")},singleLine=true,modifier=Modifier.fillMaxWidth())
+                  Row(Modifier.fillMaxWidth(),Arrangement.SpaceBetween,Alignment.CenterVertically){
+                    Text("Extra alerts (faults, battery temp, cells, connection). Off = outage alerts only.",color=WHITE,fontSize=13.sp,modifier=Modifier.weight(1f).padding(end=8.dp)); Switch(xa,{xa=it}) }
+                  OutlinedTextField(latS,{latS=it},label={Text("Latitude (for solar forecast)")},singleLine=true,modifier=Modifier.fillMaxWidth())
+                  OutlinedTextField(lonS,{lonS=it},label={Text("Longitude")},singleLine=true,modifier=Modifier.fillMaxWidth())
+                  OutlinedTextField(kwpS,{kwpS=it},label={Text("Solar array size in kW (fallback)")},singleLine=true,modifier=Modifier.fillMaxWidth())
+                  Card(Modifier.fillMaxWidth(),shape=RoundedCornerShape(14.dp),colors=CardDefaults.cardColors(containerColor=CARD)){
+                    Column(Modifier.padding(12.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){
+                      Text("Import history (Home Assistant CSV)",fontSize=13.sp,fontWeight=FontWeight.SemiBold,color=WHITE)
+                      Text(if(Monthly.rows.isEmpty()) "Nothing imported yet. Imported data feeds the forecast and Bill Compare." else "${Monthly.rows.size} months imported (${Monthly.rows.keys.minOrNull()} to ${Monthly.rows.keys.maxOrNull()}).",fontSize=11.sp,color=DIM)
+                      OutlinedButton({pick.launch(arrayOf("*/*"))},Modifier.fillMaxWidth()){Text("Choose CSV file")} } }
+                  LuxCloudCard(sp)
+                  OutlinedButton({alert(ctx,2,"Grid outage","Battery 82% \u00B7 about 14h 02m left at 0.77 kW load (test)")},Modifier.fillMaxWidth()){Text("Send test outage alert")}
+                  OutlinedButton({ctx.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))},Modifier.fillMaxWidth()){Text("Allow background running")}
+                  Button({sp.edit().putString("h",host).putString("d",dl).putString("s",sn).putString("c",cap).putString("r",res).putString("a",alr).putString("pi",pint).putString("xa",if(xa) "1" else "0").putString("ri",rimp).putString("re",rexp).putString("cu",cur).putString("lat",latS.trim()).putString("lon",lonS.trim()).putString("kwp",kwpS).apply()
+                    startMonitor(ctx); fcKey++; tab=0},Modifier.fillMaxWidth()){Text("Save & connect")}
+                }
+              }
+              Row(Modifier.fillMaxWidth().background(Color(0xFF0A1017)).navigationBarsPadding()){
+                NavItem("Live",I_LIVE,tab==0,Modifier.weight(1f)){tab=0}
+                NavItem("Extras",I_EXTRA,tab==1,Modifier.weight(1f)){tab=1}
+                NavItem("Settings",I_SET,tab==2,Modifier.weight(1f)){tab=2} }
+            }
+            if(wall) WallScreen(Store.d?:DEMO[0].second,Store.runtime){wall=false}
+            }
+          }
+          EOF
+          cat > app/src/main/java/com/lux/monitor/MonitorService.kt <<'EOF'
+          package com.lux.monitor
+          import android.app.*
+          import android.content.Context
+          import android.content.SharedPreferences
+          import android.content.Intent
+          import android.content.pm.ServiceInfo
+          import android.os.Build
+          import android.os.IBinder
+          import androidx.compose.runtime.*
+          import kotlinx.coroutines.*
+          import java.time.LocalDate
+
+          object Store{
+            var d by mutableStateOf<Lux?>(null); var err by mutableStateOf(""); var runtime by mutableStateOf("\u2013")
+            val series=mutableStateListOf<Lux>()
+            var fc by mutableStateOf<Fc?>(null)
+            var via by mutableStateOf("")
+          }
+
+          fun notifier(ctx:Context):NotificationManager=(ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).also{
+            it.createNotificationChannel(NotificationChannel("monitor","Background monitoring (silent)",NotificationManager.IMPORTANCE_MIN))
+            it.createNotificationChannel(NotificationChannel("live","Outage updates",NotificationManager.IMPORTANCE_LOW))
+            it.createNotificationChannel(NotificationChannel("alerts","Alerts",NotificationManager.IMPORTANCE_HIGH)) }
+
+          fun build(ctx:Context,ch:String,title:String,text:String,ongoing:Boolean=false):Notification=
+            Notification.Builder(ctx,ch).setSmallIcon(if(ch=="alerts") android.R.drawable.ic_dialog_alert else android.R.drawable.ic_dialog_info)
+              .setContentTitle(title).setContentText(text).setStyle(Notification.BigTextStyle().bigText(text))
+              .setContentIntent(PendingIntent.getActivity(ctx,0,Intent(ctx,MainActivity::class.java),PendingIntent.FLAG_IMMUTABLE))
+              .setOngoing(ongoing).setOnlyAlertOnce(true).build()
+
+          fun post(ctx:Context,id:Int,ch:String,title:String,text:String,ongoing:Boolean=false){
+            val nm=notifier(ctx); nm.notify(id,build(ctx,ch,title,text,ongoing)) }
+          fun alert(ctx:Context,id:Int,title:String,text:String)=post(ctx,id,"alerts",title,text)
+
+          fun hasLocal(p:SharedPreferences)=!p.getString("h","").isNullOrBlank()&&!p.getString("d","").isNullOrBlank()&&!p.getString("s","").isNullOrBlank()
+          fun hasLuxCloud(p:SharedPreferences)=!p.getString("lcn","").isNullOrBlank()&&!p.getString("lcp","").isNullOrBlank()&&!p.getString("s","").isNullOrBlank()
+
+          fun startMonitor(ctx:Context){
+            val pf=ctx.getSharedPreferences("c",0)
+            if(!(hasLocal(pf)||hasLuxCloud(pf))) return
+            ctx.startForegroundService(Intent(ctx,MonitorService::class.java))
+          }
+
+          class MonitorService:Service(){
+            private val scope=CoroutineScope(SupervisorJob()+Dispatchers.IO)
+            private var job:Job?=null
+            private var wifiLock:android.net.wifi.WifiManager.WifiLock?=null
+            private var wake:android.os.PowerManager.WakeLock?=null
+            override fun onBind(i:Intent?):IBinder?=null
+            override fun onDestroy(){ scope.cancel(); runCatching{wifiLock?.release()}; runCatching{wake?.release()}; LuxClient.close(); super.onDestroy() }
+            override fun onStartCommand(i:Intent?,f:Int,id:Int):Int{
+              val sp=getSharedPreferences("c",0)
+              val host=sp.getString("h","")!!.trim(); val dl=sp.getString("d","")!!.trim(); val sn=sp.getString("s","")!!.trim()
+              val cap=sp.getString("c","15.36")!!.toDoubleOrNull()?:15.36; val res=sp.getString("r","10")!!.toIntOrNull()?:10
+              val low=sp.getString("a","20")!!.toIntOrNull()?:20
+              val interval=(sp.getString("pi","10")!!.toIntOrNull()?:10).coerceIn(10,60)
+              val extra=sp.getString("xa","0")=="1"
+              val useLocal=hasLocal(sp); val useLux=hasLuxCloud(sp)
+              notifier(this); History.init(this); Daily.init(this); Monthly.init(this)
+              if(sp.getString("wl","1")=="1"){
+                if(wifiLock==null){ val wm=applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+                  wifiLock=wm.createWifiLock(android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF,"lux:wifi"); wifiLock?.setReferenceCounted(false); wifiLock?.acquire() }
+                if(wake==null){ val pm=getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+                  wake=pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK,"lux:cpu"); wake?.setReferenceCounted(false); wake?.acquire() }
+              } else { runCatching{wifiLock?.release()}; wifiLock=null; runCatching{wake?.release()}; wake=null }
+              val first=build(this,"monitor","Lux Monitor","Monitoring your inverter in the background",true)
+              if(Build.VERSION.SDK_INT>=34) startForeground(1,first,ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE) else startForeground(1,first)
+              job?.cancel()
+              val ctx=this
+              job=scope.launch{
+                val hist=ArrayDeque<Int>(); val win=maxOf(3,300/interval); val maxS=3600/interval
+                var bad=0; var good=0; var fail=0; var out=false; var lowSent=false; var lastUpd=0L
+                var lastFault=0L; var lastWarn=0L; var hotSent=false; var imbSent=false; var lastFc=0L; var lastOk=0L; var localRetryAt=0L; var localFails=0; var lastLux=0L; var offlineSince=0L; var offlineSent=false
+                while(isActive){
+                  var cloudTried=false
+                  try{
+                    val tNow=System.currentTimeMillis()
+                    var xo:Lux?=null; var via=""; var lastErr:Exception?=null
+                    // 1) local dongle first (quick 3 s attempts after a failure, then back off 60 s while away from home)
+                    if(useLocal&&tNow>=localRetryAt){
+                      try{ xo=LuxClient.poll(host,dl,sn,localFails>0); via="local"; localFails=0 }
+                      catch(e:Exception){ lastErr=e; localFails++; localRetryAt=tNow+(if(localFails<3) 5000L else 60000L) } }
+                    // 2) otherwise the LuxPower cloud (at most every 30 s)
+                    if(xo==null&&useLux){
+                      if(tNow-lastLux>=30000L){ cloudTried=true; try{ xo=LuxCloud.poll(sp); via="cloud"; lastLux=tNow }catch(e:Exception){ lastErr=e } }
+                      else if(Store.d!=null&&Store.via=="cloud"){ xo=Store.d; via="cloud" } }
+                    if(xo==null&&lastErr==null) lastErr=IllegalStateException("Waiting to retry the inverter")
+                    val x:Lux=xo?:throw lastErr!!
+                    Store.via=via
+                    if(fail>=4&&extra) notifier(ctx).cancel(5)
+                    fail=0; lastOk=System.currentTimeMillis(); offlineSince=0L; offlineSent=false
+                    Store.d=x; Store.err=""; Store.series.add(x); while(Store.series.size>maxS) Store.series.removeAt(0)
+                    hist.addLast(x.load); while(hist.size>win) hist.removeFirst()
+                    val avg=maxOf(50.0,hist.average())
+                    val hours=cap*1000*maxOf(0,x.soc-res)/100*0.94/avg
+                    Store.runtime=if(x.charge>x.discharge+50) "Full in "+hm(cap*1000*(100-x.soc)/100/x.charge) else hm(hours)
+                    History.add(ctx,x)
+                    Daily.put(ctx,x); pushWidget(ctx,x,Store.runtime)
+                    if(extra){
+                      fun bit(v:Long)=63-java.lang.Long.numberOfLeadingZeros(v)
+                      if(x.fault!=0L){ if(x.fault!=lastFault) alert(ctx,8,"Inverter fault","Code 0x${java.lang.Long.toHexString(x.fault)} (bit ${bit(x.fault)}).") } else if(lastFault!=0L) notifier(ctx).cancel(8)
+                      lastFault=x.fault
+                      if(x.warn!=0L&&x.warn!=lastWarn) alert(ctx,9,"Inverter warning","Code 0x${java.lang.Long.toHexString(x.warn)} (bit ${bit(x.warn)})")
+                      lastWarn=x.warn
+                      val hot=x.tBat>=45||x.cellTMax>=45
+                      if(hot&&!hotSent){ alert(ctx,6,"Battery temperature high","Battery ${x.tBat.toInt()}\u00B0C, hottest cell ${x.cellTMax}\u00B0C"); hotSent=true } else if(!hot) hotSent=false
+                      val dmv=(x.cellMaxV-x.cellMinV)*1000
+                      if(x.cellMaxV>0&&dmv>=150&&!imbSent){ alert(ctx,7,"Cell imbalance","${dmv.toInt()} mV between highest and lowest cell"); imbSent=true } else if(dmv<120) imbSent=false
+                    }
+                    val off=x.state in intArrayOf(64,96,128,136,192)||x.vGrid<80
+                    if(off){ bad++; good=0 } else { good++; bad=0 }
+                    val now=System.currentTimeMillis()
+                    val txt="Battery ${x.soc}% \u00B7 about ${hm(hours)} left at ${kw(avg.toInt())} load"
+                    if(!out&&bad>=3){ out=true; lastUpd=now; alert(ctx,2,"Grid outage",txt) }
+                    else if(out&&bad>=3&&now-lastUpd>=60000){ lastUpd=now; post(ctx,2,"live","Grid outage",txt,true) }
+                    if(out&&x.soc<=low&&!lowSent){ alert(ctx,4,"Battery low during outage","${x.soc}% \u00B7 about ${hm(hours)} left"); lowSent=true }
+                    if(out&&good>=3){ out=false; lowSent=false; notifier(ctx).cancel(2); notifier(ctx).cancel(4); post(ctx,3,"live","Grid restored","Battery ${x.soc}% \u00B7 solar ${kw(x.pv)}") }
+                    val ld=LocalDate.now(); val hourNow=java.time.LocalTime.now().hour
+                    val rI=sp.getString("ri","0.25")!!.toDoubleOrNull()?:0.0; val rE=sp.getString("re","0.10")!!.toDoubleOrNull()?:0.0
+                    if(sp.getString("ws","1")=="1"&&ld.dayOfWeek==java.time.DayOfWeek.SUNDAY&&hourNow>=18&&sp.getString("ws_last","")!=ld.toString()){
+                      sp.edit().putString("ws_last",ld.toString()).apply()
+                      val w=period(ld.minusDays(6),ld,rI,rE).s
+                      post(ctx,11,"live","Weekly summary","Solar ${"%.0f".format(w[0])} kWh, exported ${"%.0f".format(w[3])}, imported ${"%.0f".format(w[2])}, net ${"%.0f".format(w[3]-w[2])} kWh") }
+                    if(now-lastFc>3*3600000L){ lastFc=now
+                      val la=sp.getString("lat","")!!.trim(); val lo=sp.getString("lon","")!!.trim()
+                      if(la.isNotEmpty()&&lo.isNotEmpty()) runCatching{fetchForecast(la,lo)}.getOrNull()?.let{ Store.fc=it } }
+                    val fcn=Store.fc
+                    if(sp.getString("sw","1")=="1"&&fcn!=null&&hourNow>=17&&sp.getString("sw_last","")!=ld.toString()){
+                      val f=forecast(fcn,sp.getString("kwp","10")!!.toDoubleOrNull()?:10.0)
+                      val rec=Daily.days.entries.filter{it.key<ld.toString()&&it.value[0]>1}.sortedByDescending{it.key}.take(7).map{it.value[0]}
+                      if(f.rows.size>=2&&rec.size>=3){
+                        val usual=rec.average(); val tm=f.rows[1].prod
+                        if(tm<0.4*usual&&x.soc<70){ sp.edit().putString("sw_last",ld.toString()).apply()
+                          alert(ctx,10,"Low sun forecast for tomorrow","Forecast ${"%.0f".format(tm)} kWh vs usual ${"%.0f".format(usual)}. Battery is at ${x.soc}%. Consider charging it fully if a storm is coming.") } } }
+                  }catch(e:CancellationException){throw e}
+                  catch(e:Exception){
+                    fail++
+                    if(e.message?.contains("offline",true)==true){
+                      if(offlineSince==0L) offlineSince=System.currentTimeMillis()
+                      if(!offlineSent&&System.currentTimeMillis()-offlineSince>600000L){
+                        alert(ctx,5,"Inverter offline","The LuxPower cloud has shown your inverter offline for 10 minutes. Power or internet may be out at home."); offlineSent=true } }
+                    Store.err=if(e.message?.startsWith("Cloud login failed")==true) (e.message?:"") else if(fail>=3) "Reconnecting to the inverter. Showing the last reading"+(if(lastOk>0) " from "+java.text.SimpleDateFormat("HH:mm:ss").format(java.util.Date(lastOk)) else "")+"." else ""
+                    if(extra&&fail==4) alert(ctx,5,"Can't reach inverter","Check Wi-Fi or VPN, or power may be out at home.")
+                  }
+                  delay(if(fail>0&&cloudTried) 45000L else if(fail in 1..5) 5000L else (if(Store.via=="cloud") maxOf(interval,30) else interval)*1000L)
+                }
+              }
+              return START_STICKY
+            }
+          }
+          EOF
+          cat > app/src/main/java/com/lux/monitor/Widget.kt <<'EOF'
+          package com.lux.monitor
+          import android.app.PendingIntent
+          import android.appwidget.AppWidgetManager
+          import android.appwidget.AppWidgetProvider
+          import android.content.BroadcastReceiver
+          import android.content.ComponentName
+          import android.content.Context
+          import android.content.Intent
+          import android.widget.RemoteViews
+          import java.time.LocalDate
+
+          class LuxWidget:AppWidgetProvider(){
+            override fun onUpdate(c:Context,m:AppWidgetManager,ids:IntArray){ for(id in ids) m.updateAppWidget(id,views(c)) }
+          }
+          class BootReceiver:BroadcastReceiver(){
+            override fun onReceive(c:Context,i:Intent){ if(i.action==Intent.ACTION_BOOT_COMPLETED) startMonitor(c) }
+          }
+          fun views(c:Context):RemoteViews{
+            val v=c.getSharedPreferences("c",0).getString("w","")!!.split("|")
+            return RemoteViews(c.packageName,R.layout.widget).apply{
+              intArrayOf(R.id.w_soc,R.id.w_rt,R.id.w_pv,R.id.w_load,R.id.w_tg,R.id.w_te,R.id.w_ti,R.id.w_wg,R.id.w_we,R.id.w_wi)
+                .forEachIndexed{i,id-> setTextViewText(id,v.getOrElse(i){"\u2013"}) }
+              setOnClickPendingIntent(R.id.w_root,PendingIntent.getActivity(c,0,Intent(c,MainActivity::class.java),PendingIntent.FLAG_IMMUTABLE)) }
+          }
+          fun pushWidget(c:Context,x:Lux,rt:String){
+            Daily.init(c); val n=LocalDate.now(); val w=Daily.sum(n.minusDays(6),n).first
+            val f={d:Double->"%.1f".format(d)}
+            c.getSharedPreferences("c",0).edit().putString("w","${x.soc}%|$rt|${kw(x.pv)}|${kw(x.load)}|${f(x.yld)}|${f(x.expDay)}|${f(x.impDay)}|${f(w[0])}|${f(w[3])}|${f(w[2])}").apply()
+            AppWidgetManager.getInstance(c).updateAppWidget(ComponentName(c,LuxWidget::class.java),views(c))
+          }
+          EOF
+          cat > app/src/main/res/drawable/ic_fg.xml <<'EOF'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+          <path android:pathData="M54,54m-27,0a27,27 0,1 1,54 0a27,27 0,1 1,-54 0" android:strokeColor="#66BB6A" android:strokeWidth="4" android:fillColor="#00000000"/>
+          <path android:pathData="M58,32L42,56L52,56L48,76L66,50L56,50Z" android:fillColor="#FFB300"/>
+          </vector>
+          EOF
+          cat > app/src/main/res/drawable/widget_bg.xml <<'EOF'
+          <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle"><solid android:color="#0C131B"/><stroke android:width="1dp" android:color="#1B2836"/><corners android:radius="20dp"/></shape>
+          EOF
+          cat > app/src/main/res/layout/widget.xml <<'EOF'
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/w_root" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="horizontal" android:gravity="center_vertical" android:background="@drawable/widget_bg" android:paddingLeft="14dp" android:paddingRight="14dp" android:paddingTop="8dp" android:paddingBottom="8dp">
+          <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
+          <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="bottom">
+          <TextView android:id="@+id/w_soc" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="–" android:textColor="#34D399" android:textSize="26sp" android:textStyle="bold"/>
+          <TextView android:id="@+id/w_rt" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginLeft="8dp" android:layout_marginBottom="3dp" android:text="–" android:textColor="#E6EDF5" android:textSize="12sp"/>
+          </LinearLayout>
+          <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content" android:orientation="horizontal">
+          <TextView android:id="@+id/a" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Solar " android:textColor="#9AA8BA" android:textSize="11sp" /><TextView android:id="@+id/w_pv" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="–" android:textColor="#FBBF24" android:textSize="11sp" /><TextView android:id="@+id/b" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="  Load " android:textColor="#9AA8BA" android:textSize="11sp" /><TextView android:id="@+id/w_load" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="–" android:textColor="#A78BFA" android:textSize="11sp" />
+          </LinearLayout>
+          </LinearLayout>
+          <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1.2" android:layout_marginLeft="12dp" android:orientation="vertical">
+          <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal"><TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="kWh" android:textColor="#9AA8BA" android:textSize="9sp"/><TextView android:id="@+id/hgen" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="end" android:text="GEN" android:textColor="#FBBF24" android:textSize="9sp" /><TextView android:id="@+id/hexp" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="end" android:text="EXP" android:textColor="#22D3EE" android:textSize="9sp" /><TextView android:id="@+id/himp" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="end" android:text="IMP" android:textColor="#60A5FA" android:textSize="9sp" /></LinearLayout><LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal"><TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="TODAY" android:textColor="#9AA8BA" android:textSize="10sp"/><TextView android:id="@+id/w_tg" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="end" android:text="–" android:textColor="#FBBF24" android:textSize="13sp" android:textStyle="bold"/><TextView android:id="@+id/w_te" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="end" android:text="–" android:textColor="#22D3EE" android:textSize="13sp" android:textStyle="bold"/><TextView android:id="@+id/w_ti" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="end" android:text="–" android:textColor="#60A5FA" android:textSize="13sp" android:textStyle="bold"/></LinearLayout><LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal"><TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="WEEK" android:textColor="#9AA8BA" android:textSize="10sp"/><TextView android:id="@+id/w_wg" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="end" android:text="–" android:textColor="#FBBF24" android:textSize="13sp" android:textStyle="bold"/><TextView android:id="@+id/w_we" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="end" android:text="–" android:textColor="#22D3EE" android:textSize="13sp" android:textStyle="bold"/><TextView android:id="@+id/w_wi" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="end" android:text="–" android:textColor="#60A5FA" android:textSize="13sp" android:textStyle="bold"/></LinearLayout>
+          </LinearLayout>
+          </LinearLayout>
+          EOF
+          cat > app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml <<'EOF'
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android"><background android:drawable="@color/ic_bg"/><foreground android:drawable="@drawable/ic_fg"/></adaptive-icon>
+          EOF
+          cat > app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml <<'EOF'
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android"><background android:drawable="@color/ic_bg"/><foreground android:drawable="@drawable/ic_fg"/></adaptive-icon>
+          EOF
+          cat > app/src/main/res/values/colors.xml <<'EOF'
+          <resources><color name="ic_bg">#0F1419</color></resources>
+          EOF
+          cat > app/src/main/res/xml/widget_info.xml <<'EOF'
+          <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android" android:minWidth="250dp" android:minHeight="70dp" android:updatePeriodMillis="0" android:initialLayout="@layout/widget" android:resizeMode="horizontal|vertical" android:widgetCategory="home_screen"/>
+          EOF
+          cat > build.gradle.kts <<'EOF'
+          plugins{id("com.android.application") version "8.5.2" apply false
+          id("org.jetbrains.kotlin.android") version "1.9.24" apply false}
+          EOF
+          cat > gradle.properties <<'EOF'
+          android.useAndroidX=true
+          EOF
+          cat > settings.gradle.kts <<'EOF'
+          pluginManagement{repositories{google();mavenCentral();gradlePluginPortal()}}
+          dependencyResolutionManagement{repositories{google();mavenCentral()}}
+          rootProject.name="LuxMonitor"
+          include(":app")
+          EOF
+          base64 -d app/fixed.keystore.b64 > app/fixed.keystore
+      - name: Build debug APK
+        working-directory: proj
+        run: gradle assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LuxMonitor-debug-apk
+          path: proj/app/build/outputs/apk/debug/app-debug.apk
+      - name: Publish APK as a release (direct .apk download)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Lux Monitor build ${{ github.run_number }}
+          files: proj/app/build/outputs/apk/debug/app-debug.apk
