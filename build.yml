@@ -216,6 +216,47 @@ jobs:
             return Pair(recent,if(before.isNaN()) recent else before)
           }
 
+          class NW(val startMin:Int,val endMin:Int,val impKwh:Double,val loadKwh:Double)
+          class NightStat(val n:Int,val startMin:Int,val endMin:Int,val impAvg:Double,val impMin:Double,val impMax:Double,val loadAvg:Double,val loadMax:Double,val hours:Double)
+          fun fmtMin(m:Int):String="%02d:%02d".format(m/60,m%60)
+
+          /** For each recent evening: from when the grid started supplying (import above 150 W for 10 minutes after noon)
+           *  until the sun fully took over next morning (solar covering the load for 10 minutes after 04:00). */
+          fun nightWindows():List<NW>{
+            val z=ZoneId.systemDefault()
+            val pts=History.pts.toList().sortedBy{it.t}
+            if(pts.size<200) return emptyList()
+            val ts=pts.map{ Instant.ofEpochMilli(it.t).atZone(z).toLocalDateTime() }
+            fun imp(i:Int)=maxOf(0,-pts[i].grid)
+            val out=ArrayList<NW>()
+            var d=ts.first().toLocalDate(); val last=ts.last().toLocalDate()
+            while(d.isBefore(last)){
+              val from=d.atTime(12,0); val to=d.plusDays(1).atTime(12,0)
+              val idx=pts.indices.filter{ ts[it]>=from&&ts[it]<to }
+              fun run(k:Int,c:(Int)->Boolean):Boolean{ if(k+10>idx.size) return false; for(j in k until k+10) if(!c(idx[j])) return false; return true }
+              var si=-1
+              for(k in idx.indices){ if(ts[idx[k]].toLocalDate()!=d) break; if(imp(idx[k])>150&&run(k){ imp(it)>150 }){ si=k; break } }
+              var ek=-1
+              if(si>=0) for(k in si+1 until idx.size){ val t=ts[idx[k]]
+                if(t.toLocalDate()==d.plusDays(1)&&t.hour>=4&&run(k){ pts[it].pv>=pts[it].load&&imp(it)<150 }){ ek=k; break } }
+              if(si>=0&&ek>si){
+                var ik=0.0; var lk=0.0; var gap=0.0
+                for(k in si until ek){
+                  val sec=java.time.Duration.between(ts[idx[k]],ts[idx[k+1]]).seconds
+                  gap=maxOf(gap,sec.toDouble()); val h=minOf(sec,300L)/3600.0
+                  ik+=imp(idx[k])*h/1000.0; lk+=pts[idx[k]].load*h/1000.0 }
+                val dur=java.time.Duration.between(ts[idx[si]],ts[idx[ek]]).toMinutes()
+                if(gap<=900&&dur>=120) out.add(NW(ts[idx[si]].hour*60+ts[idx[si]].minute,ts[idx[ek]].hour*60+ts[idx[ek]].minute,ik,lk)) }
+              d=d.plusDays(1)
+            }
+            return out
+          }
+          fun nightStat():NightStat?{
+            val w=nightWindows(); if(w.isEmpty()) return null
+            val s=w.map{it.startMin}.average().toInt(); val e=w.map{it.endMin}.average().toInt()
+            return NightStat(w.size,s,e,w.map{it.impKwh}.average(),w.minOf{it.impKwh},w.maxOf{it.impKwh},w.map{it.loadKwh}.average(),w.maxOf{it.loadKwh},(e+1440-s)/60.0)
+          }
+
           @Composable fun OutlookLine(title:String,o:Outlook?,sr:LocalDateTime?){
             if(o==null) return
             val e=o.emptyAt
@@ -259,6 +300,23 @@ jobs:
                 OutlookLine("With the forecast sun",oSun,sRise)
                 OutlookLine("With no sun at all (worst case)",oNo,sRise)
               }
+              val ns=nightStat(); val st=ns?:NightStat(5,1060,495,7.8,5.1,9.9,9.4,13.1,14.6)
+              Spacer(Modifier.height(10.dp))
+              Text("GRID WINDOW "+(if(ns==null) "(SAMPLE - NEEDS A RECORDED NIGHT)" else "(LAST ${st.n} NIGHTS)"),fontSize=10.sp,letterSpacing=1.5.sp,color=if(ns==null) AMBER else DIM)
+              Text("The grid starts supplying around ${fmtMin(st.startMin)} and the sun fully takes over around ${fmtMin(st.endMin)} (about ${"%.1f".format(st.hours)} h).",fontSize=13.sp,color=WHITE,modifier=Modifier.padding(vertical=4.dp))
+              Row(Modifier.fillMaxWidth(),Arrangement.spacedBy(8.dp)){
+                Kpi("AVG IMPORT",st.impAvg,BLUE,I_GRID,Modifier.weight(1f),"kWh",1)
+                Kpi("HEAVIEST",st.impMax,AMBER,I_GRID,Modifier.weight(1f),"kWh",1)
+                Kpi("AVG USE",st.loadAvg,VIOLET,I_HOME,Modifier.weight(1f),"kWh",1) }
+              val capEff=cap*0.94; val resF=1-res/100.0
+              val needT=st.loadAvg*1.2; val needM=st.loadMax*1.2
+              val startT=res+needT/capEff*100; val startM=res+needM/capEff*100
+              Text("Battery recommendation",fontSize=12.sp,fontWeight=FontWeight.Bold,color=WHITE,modifier=Modifier.padding(top=10.dp))
+              Text(if(startT<=100) "Typical night: be at about ${Math.ceil(startT).toInt()}% when the grid starts supplying (around ${fmtMin(st.startMin)}) to ride through on battery with a 20% margin."
+                else "A ${"%.1f".format(cap)} kWh bank can't cover a typical night on its own. You would need about ${"%.0f".format(needT/(0.94*resF))} kWh.",fontSize=12.sp,color=if(startT<=100) GREEN else AMBER)
+              Text(if(startM<=100) "Heaviest recent night: needs about ${Math.ceil(startM).toInt()}% at the evening start."
+                else "Heaviest recent night needs about ${"%.0f".format(needM/(0.94*resF))} kWh of battery.",fontSize=12.sp,color=if(startM<=100) GREEN else AMBER)
+              Text("Uses your real load between the grid start and sun takeover, 94% efficiency and your ${res}% reserve. Average import is what the grid supplied in that window.",fontSize=11.sp,color=DIM,modifier=Modifier.padding(top=4.dp))
             }
 
             var confirm by remember{mutableStateOf(false)}
