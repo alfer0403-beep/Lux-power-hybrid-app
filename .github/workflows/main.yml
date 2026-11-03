@@ -319,6 +319,8 @@ jobs:
               Text("Uses your real load between the grid start and sun takeover, 94% efficiency and your ${res}% reserve. Average import is what the grid supplied in that window.",fontSize=11.sp,color=DIM,modifier=Modifier.padding(top=4.dp))
             }
 
+            OffGridCard(sp)
+
             var confirm by remember{mutableStateOf(false)}
             var smMsg by remember{mutableStateOf("")}
             val host=sp.getString("h","")!!.trim(); val dl=sp.getString("d","")!!.trim(); val sn=sp.getString("s","")!!.trim()
@@ -682,7 +684,8 @@ jobs:
             val tInv:Double=41.0,val tBat:Double=27.0,val cellMaxV:Double=3.345,val cellMinV:Double=3.338,
             val cellTMax:Double=27.5,val cellTMin:Double=26.1,val cycles:Int=112,val soh:Int=100,
             val totGen:Double=12840.0,val totExp:Double=7302.0,val totImp:Double=3121.0,val totChg:Double=2500.0,val totDis:Double=2310.0,val fault:Long=0,val warn:Long=0,
-            val pv1:Int=0,val pv2:Int=0,val pv3:Int=0,val vEps:Double=0.0,val e1:Double=0.0,val e2:Double=0.0,val e3:Double=0.0)
+            val pv1:Int=0,val pv2:Int=0,val pv3:Int=0,val vEps:Double=0.0,val e1:Double=0.0,val e2:Double=0.0,val e3:Double=0.0,
+            val bmsChgA:Double=0.0,val bmsDisA:Double=0.0,val batCount:Int=0,val batAh:Int=0)
 
           /** LuxPower WiFi dongle protocol (TCP 8000). Register numbers verified against the Lux Modbus register list. */
           object LuxClient {
@@ -752,7 +755,7 @@ jobs:
                 cellTMax=sg(r[103])/10.0,cellTMin=sg(r[104])/10.0,cycles=r[106],soh=(r[5] shr 8) and 255,
                 totGen=l(40)+l(42)+l(44),totExp=l(56),totImp=l(58),totChg=l(50),totDis=l(52),
                 fault=(r[61].toLong() shl 16) or r[60].toLong(),warn=(r[63].toLong() shl 16) or r[62].toLong(),
-                pv1=r[7],pv2=r[8],pv3=r[9],vEps=r[20]/10.0,e1=e(28),e2=e(29),e3=e(30))
+                pv1=r[7],pv2=r[8],pv3=r[9],vEps=r[20]/10.0,e1=e(28),e2=e(29),e3=e(30),bmsChgA=r[81]/100.0,bmsDisA=r[82]/100.0,batCount=r[96],batAh=r[97])
             }
 
             private fun packet(h:DataInputStream):ByteArray{
@@ -914,7 +917,9 @@ jobs:
                 chgDay=chg,dischgDay=dis,impDay=imp,expDay=exp,state=status,tInv=r.optDouble("tinner",0.0),tBat=r.optDouble("tBat",0.0),
                 cellMaxV=cMax,cellMinV=cMin,cellTMax=tMax,cellTMin=tMin,cycles=cyc,soh=soh,
                 totGen=ed("totalYielding"),totExp=ed("totalExport"),totImp=ed("totalImport"),totChg=ed("totalCharging"),totDis=ed("totalDischarging"),
-                pv1=p1,pv2=p2,pv3=p3,vEps=r.optDouble("vepsr",0.0)/10.0)
+                pv1=p1,pv2=p2,pv3=p3,vEps=r.optDouble("vepsr",0.0)/10.0,
+                bmsChgA=r.optDouble("maxChgCurr",0.0)/100.0,bmsDisA=r.optDouble("maxDischgCurr",r.optDouble("maxDischargeCurr",0.0))/100.0,
+                batCount=r.optInt("batParallelNum"),batAh=r.optInt("batCapacity"))
             }
             fun test(sp:SharedPreferences):String{
               cookie=""; energy=null; bat=null
@@ -1536,6 +1541,116 @@ jobs:
                 }
               }
               return START_STICKY
+            }
+          }
+          EOF
+          cat > app/src/main/java/com/lux/monitor/OffGrid.kt <<'EOF'
+          package com.lux.monitor
+          import android.content.SharedPreferences
+          import androidx.compose.foundation.layout.*
+          import androidx.compose.material3.*
+          import androidx.compose.runtime.*
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.unit.dp
+          import androidx.compose.ui.unit.sp
+          import kotlinx.coroutines.Dispatchers
+          import kotlinx.coroutines.launch
+          import java.time.LocalDate
+          import java.time.YearMonth
+
+          fun fm(v:Double,n:Int=0):String="%.${n}f".format(v)
+
+          @Composable fun OkLine(ok:Boolean,text:String){
+            Row(Modifier.fillMaxWidth().padding(vertical=3.dp)){
+              Text(if(ok) "\u2713" else "\u2717",fontSize=14.sp,fontWeight=FontWeight.Bold,color=if(ok) GREEN else RED,modifier=Modifier.width(22.dp))
+              Text(text,fontSize=12.sp,color=WHITE) }
+          }
+          @Composable fun Bullet(text:String){
+            Row(Modifier.fillMaxWidth().padding(vertical=3.dp)){
+              Text("\u2022",fontSize=12.sp,color=CYAN,modifier=Modifier.width(16.dp)); Text(text,fontSize=12.sp,color=WHITE) }
+          }
+
+          /** What it would take to run fully off-grid, from your own usage, solar, battery and inverter data. */
+          @Composable fun ColumnScope.OffGridCard(sp:SharedPreferences){
+            val scope=rememberCoroutineScope()
+            val live=Store.d
+            val x=live?:Lux(62,53.2,0,0,0,0,0,900,bmsChgA=150.0,bmsDisA=150.0,batCount=3,batAh=300)
+            val cap=sp.getString("c","15.36")!!.toDoubleOrNull()?:15.36; val res=sp.getString("r","10")!!.toIntOrNull()?:10
+            val coords=sp.getString("lat","")!!.isNotBlank()&&sp.getString("lon","")!!.isNotBlank()
+            val src=Store.fc?:(if(!coords) sampleFc() else null)
+            val kwp=sp.getString("kwp","10")!!.toDoubleOrNull()?:10.0
+            val fr=src?.let{ forecast(it,kwp) }
+            val planKwh=sp.getString("ogkwh","40")!!.toDoubleOrNull()?:40.0
+            val planKw=sp.getString("ogkw","2")!!.toDoubleOrNull()?:2.0
+            val today=LocalDate.now().toString()
+            val rec=Daily.days.entries.filter{ it.key<today&&it.value[1]>1 }.sortedByDescending{it.key}.take(14).map{it.value[1]}
+            val lm=Monthly.lastComplete()
+            val eDay=if(rec.size>=3) rec.average() else if(lm!=null) lm.second[1]/YearMonth.parse(lm.first).lengthOfMonth() else 25.0
+            val rads=src?.rad?.filter{it>0.5}?.sorted()
+            val radLow=if(rads!=null&&rads.size>=5) rads[(rads.size*0.25).toInt()] else 3.5
+            val k=fr?.k?:(kwp*0.8)
+            val prodLow=k*radLow; val kwpEst=k/0.8; val needDay=eDay*1.1
+            val extraKwp=maxOf(0.0,(needDay-prodLow)/radLow/0.8)
+            val ns=nightStat()
+            val nightKwh=(ns?.loadMax?:eDay*0.6)*1.2; val dayKwh=eDay*1.15
+            val eff=0.94*(1-res/100.0)
+            val usable=cap*eff
+            val bankNight=nightKwh/eff; val bankDay=dayKwh/eff
+            val addNight=maxOf(0,Math.ceil((bankNight-cap)/5.12).toInt()); val addDay=maxOf(0,Math.ceil((bankDay-cap)/5.12).toInt())
+            val peakKw=(History.pts.maxOfOrNull{it.load}?:x.load)/1000.0
+            val invKw=11.5; val bmsKw=x.bmsDisA*x.vBat/1000.0
+            val checks=listOf(usable>=nightKwh,prodLow>=needDay,usable>=dayKwh,peakKw<=invKw*0.8&&(x.bmsDisA<=0||bmsKw>=peakKw))
+            val passed=checks.count{it}
+            val planUsable=planKwh*eff; val planProd=prodLow*(kwpEst+planKw)/kwpEst
+            val surplus=planProd-eDay
+            val refill=if(surplus>1) planUsable/surplus else null
+            var ogMsg by remember{mutableStateOf("")}
+            var lowLim by remember{mutableStateOf<Int?>(null)}
+            val host=sp.getString("h","")!!.trim(); val dl=sp.getString("d","")!!.trim(); val sn=sp.getString("s","")!!.trim()
+
+            Section("OFF-GRID READINESS",I_BAT,GREEN,summary="$passed of 4 checks"){
+              if(live==null) Text("Sample numbers until your data is connected.",fontSize=12.sp,color=AMBER)
+              Text(when(passed){4->"Ready: your system could run off-grid with a margin."; 3->"Almost ready: one gap to close."; else->"Not yet ready: see what to add below."},
+                fontSize=14.sp,fontWeight=FontWeight.Bold,color=if(passed==4) GREEN else if(passed==3) AMBER else RED,modifier=Modifier.padding(bottom=6.dp))
+              OkLine(checks[0],"Night battery: ${fm(usable,1)} kWh usable vs ${fm(nightKwh,1)} kWh needed for your heaviest night (+20%).")
+              OkLine(checks[1],"Solar on a low-sun day: about ${fm(prodLow)} kWh vs ${fm(needDay)} kWh needed (average use ${fm(eDay)} kWh/day +10%).")
+              OkLine(checks[2],"One full day with no sun: ${fm(usable,1)} kWh usable vs ${fm(dayKwh,1)} kWh needed.")
+              OkLine(checks[3],"Power: recorded peak load ${fm(peakKw,1)} kW vs inverter ${fm(invKw,1)} kW"+(if(x.bmsDisA>0) "; batteries allow ${fm(bmsKw,1)} kW" else "")+".")
+
+              Text("What to add",fontSize=12.sp,fontWeight=FontWeight.Bold,color=WHITE,modifier=Modifier.padding(top=10.dp))
+              if(addDay>0) Bullet("Batteries: +$addDay x Pytes V5 (5.12 kWh each) gives about ${fm(cap+addDay*5.12)} kWh, enough for a full day without sun. Night only needs +$addNight. Allow rack space for them; each V5 module supports up to 16 per group.")
+              else Bullet("Battery size is enough for a full day without sun.")
+              if(extraKwp>0.05) Bullet("Solar: about +${fm(extraKwp,1)} kWp (roughly ${Math.ceil(extraKwp/0.45).toInt()} panels of 450 W) to cover your use on a low-sun day. Your array is about ${fm(kwpEst,1)} kWp and the inverter accepts up to 18 kW, so there is ${fm(maxOf(0.0,18-kwpEst),1)} kW of headroom.")
+              else Bullet("Solar covers your average use on a low-sun day.")
+              if(peakKw>invKw*0.8) Bullet("Inverter: recorded peak ${fm(peakKw,1)} kW is close to the 11.5 kW limit. Add a second inverter in parallel (up to 10 are supported) or put big loads on the smart-load output.")
+              else Bullet("Inverter size is fine for the recorded peak of ${fm(peakKw,1)} kW. Short motor-start spikes may be higher than the history shows.")
+              if(x.bmsDisA>0&&bmsKw<peakKw) Bullet("The batteries currently allow only ${fm(bmsKw,1)} kW of discharge. Each extra V5 module adds about 3.8 kW.")
+              Bullet("Generator: the inverter has a dedicated generator input. A 5 to 8 kW generator is the usual safety net for several days of bad weather.")
+              Bullet("Backup circuits: every circuit you need must be on the backup (UPS) output, rated 11.5 kW. Check your utility's rules before disconnecting fully.")
+
+              Text("Your plan: ${fm(planKwh)} kWh battery and +${fm(planKw,1)} kW solar",fontSize=12.sp,fontWeight=FontWeight.Bold,color=WHITE,modifier=Modifier.padding(top=10.dp))
+              OkLine(planUsable>=nightKwh,"Night: ${fm(planUsable,1)} kWh usable vs ${fm(nightKwh,1)} needed.")
+              OkLine(planUsable>=dayKwh,"One day without sun: ${fm(planUsable,1)} kWh usable, which is ${fm(planUsable/eDay,1)} days at your average use (needs ${fm(dayKwh,1)}).")
+              OkLine(planProd>=needDay,"Low-sun day production: about ${fm(planProd)} kWh vs ${fm(needDay)} needed.")
+              if(refill!=null) Text("After a completely empty battery, a low-sun surplus of ${fm(surplus,1)} kWh/day refills it in about ${fm(refill,1)} days.",fontSize=11.sp,color=DIM)
+              PrefField(sp,"ogkwh","Planned battery bank (kWh)","40")
+              PrefField(sp,"ogkw","Planned extra solar (kW)","2")
+
+              Text("What your inverter reports",fontSize=12.sp,fontWeight=FontWeight.Bold,color=WHITE,modifier=Modifier.padding(top=10.dp))
+              Bullet("Battery modules seen: ${x.batCount} (${x.batAh} Ah total). Pytes V5 bank: ${fm(x.batCount*5.12,1)} kWh nominal.")
+              Bullet("BMS limits: charge ${fm(x.bmsChgA)} A (${fm(x.bmsChgA*x.vBat/1000.0,1)} kW), discharge ${fm(x.bmsDisA)} A (${fm(bmsKw,1)} kW).")
+              Bullet("Datasheet: 3 solar inputs (max 18 kW array, 25/15/15 A per input), up to 250 A battery current, 12 kW charge power, 11.5 kW backup output with 2x surge for 0.5 s, parallel up to 10 inverters, generator port, AC coupling, smart load.")
+              OutlinedButton({ if(host.isBlank()||dl.isBlank()||sn.isBlank()) ogMsg="Needs the local dongle details in Settings."
+                else scope.launch(Dispatchers.IO){ ogMsg=try{
+                  val low=LuxClient.readHold(host,dl,sn,125); val eod=LuxClient.readHold(host,dl,sn,105); val ac=LuxClient.readHold(host,dl,sn,67)
+                  val v=LuxClient.readHold(host,dl,sn,90); val f=LuxClient.readHold(host,dl,sn,91); lowLim=low
+                  "Off-grid battery low limit: $low%\nGrid-tied discharge cut-off: $eod%\nAC-charge SOC limit: $ac%\nOff-grid output: $v V, $f Hz"
+                }catch(e:Exception){ "Failed: "+(e.message?:e.toString()) } } },Modifier.fillMaxWidth()){Text("Read off-grid settings from the inverter")}
+              val ll=lowLim
+              if(ll!=null&&ll!=res) OutlinedButton({ sp.edit().putString("r",ll.toString()).apply(); ogMsg="Reserve set to $ll%. Reopen this tab to refresh the numbers." },Modifier.fillMaxWidth()){Text("Use $ll% as my reserve (matches the inverter)")}
+              if(ogMsg.isNotEmpty()) Text(ogMsg,fontSize=12.sp,color=WHITE)
+              Text("Estimates use your recorded usage, the sun forecast and 94% battery efficiency. Treat them as a guide and have an installer confirm before disconnecting from the grid.",fontSize=11.sp,color=DIM,modifier=Modifier.padding(top=6.dp))
             }
           }
           EOF
