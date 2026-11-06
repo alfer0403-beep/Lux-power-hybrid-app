@@ -664,7 +664,7 @@ jobs:
                       Ratio("INV LOAD",x.load/12000f,GREEN,I_INV,Modifier.weight(1f)) } }
                   Panel("BATTERY BANK",I_BAT,GREEN,Modifier.fillMaxWidth()){
                     Text("${x.soc}%  \u00B7  ${x.vBat} V",fontSize=16.sp,fontFamily=FontFamily.Monospace,fontWeight=FontWeight.Bold,color=WHITE)
-                    Box(Modifier.fillMaxWidth().height(10.dp).clip(RoundedCornerShape(5.dp)).background(Color(0xFF17212C))){
+                    Box(Modifier.fillMaxWidth().height(10.dp).clip(RoundedCornerShape(5.dp)).background(TRACK)){
                       Box(Modifier.fillMaxWidth(maxOf(x.soc/100f,0.01f)).fillMaxHeight().background(Brush.horizontalGradient(listOf(CYAN,GREEN)))) }
                     Text(if(Store.d==null) "Sample data" else stateText(x.state),fontSize=11.sp,color=DIM) } } }
               Panel("REAL-TIME POWER",I_HIS,CYAN,Modifier.fillMaxWidth()){
@@ -1002,13 +1002,16 @@ jobs:
             override fun onCreate(b:Bundle?){super.onCreate(b)
               val sp=getSharedPreferences("c",0)
               History.init(this); Daily.init(this); Monthly.init(this)
+              Th.idx=sp.getString("theme","0")!!.toIntOrNull()?:0
               if(android.os.Build.VERSION.SDK_INT>=33) requestPermissions(arrayOf("android.permission.POST_NOTIFICATIONS"),1)
               setContent{MaterialTheme(colorScheme=darkColorScheme()){Surface(Modifier.fillMaxSize(),color=BG){Screen(viewModel(),sp)}}}}
           }
 
-          val BG=Color(0xFF070B10); val CARD=Color(0xFF0C131B); val LINE=Color(0xFF1B2836); val DIM=Color(0xFF9AA8BA); val WHITE=Color(0xFFE6EDF5)
-          val AMBER=Color(0xFFFBBF24); val CYAN=Color(0xFF22D3EE); val BLUE=Color(0xFF60A5FA); val GREEN=Color(0xFF34D399)
-          val VIOLET=Color(0xFFA78BFA); val PINK=Color(0xFFF472B6); val RED=Color(0xFFEF5350)
+          val BG:Color get()=Th.cur.bg; val CARD:Color get()=Th.cur.card; val LINE:Color get()=Th.cur.line; val LINE2:Color get()=Th.cur.line2
+          val DIM:Color get()=Th.cur.dim; val WHITE:Color get()=Th.cur.text
+          val TILE:Color get()=Th.cur.tile; val TRACK:Color get()=Th.cur.track; val DEEP:Color get()=Th.cur.deep; val CHIP:Color get()=Th.cur.chip
+          val AMBER:Color get()=Th.cur.solar; val CYAN:Color get()=Th.cur.grid; val BLUE:Color get()=Th.cur.gridIn; val GREEN:Color get()=Th.cur.battery
+          val VIOLET:Color get()=Th.cur.home; val PINK:Color get()=Th.cur.soc; val RED=Color(0xFFEF5350)
           fun kw(w:Int)=if(w>=1000) "%.2f kW".format(w/1000.0) else "$w W"
           fun ip(d:String)=PathParser().parsePathString(d).toPath()
           val I_SOL=ip("M4 15 L7 6 H21 L18 15 Z M12 6 L9.5 15 M16.5 6 L14 15 M5.5 10.5 H19.5 M12 15 V20 M8 20 H16")
@@ -1024,15 +1027,18 @@ jobs:
           val I_SET=ip("M4 8 H20 M4 16 H20 M11.2 8 a2.2 2.2 0 1 0 -4.4 0 a2.2 2.2 0 1 0 4.4 0 M17.2 16 a2.2 2.2 0 1 0 -4.4 0 a2.2 2.2 0 1 0 4.4 0")
 
           fun DrawScope.icon(p:Path,col:Color,c:Offset,s:Float,glow:Boolean=true){
+            val st=Th.cur.style
+            if(st==2) drawRoundRect(col.copy(alpha=.16f),Offset(c.x-s*0.7f,c.y-s*0.7f),Size(s*1.4f,s*1.4f),CornerRadius(s*0.38f))
             withTransform({translate(c.x-s/2,c.y-s/2);scale(s/24f,s/24f,Offset.Zero)}){
-              if(glow) drawPath(p,col.copy(alpha=.3f),style=Stroke(4.5f,cap=StrokeCap.Round,join=StrokeJoin.Round))
-              drawPath(p,col,style=Stroke(1.9f,cap=StrokeCap.Round,join=StrokeJoin.Round)) }
+              if(st==1) drawPath(p,col.copy(alpha=.30f))
+              if(glow&&st!=2) drawPath(p,col.copy(alpha=.3f),style=Stroke(4.5f,cap=StrokeCap.Round,join=StrokeJoin.Round))
+              drawPath(p,col,style=Stroke(if(st==1) 2.3f else 1.9f,cap=StrokeCap.Round,join=StrokeJoin.Round)) }
           }
           fun DrawScope.label(tm:TextMeasurer,s:String,x:Float,y:Float,px:Float,col:Color,mono:Boolean=false,bold:Boolean=false,center:Boolean=false){
             val m=tm.measure(s,TextStyle(color=col,fontSize=px.toSp(),fontFamily=if(mono) FontFamily.Monospace else FontFamily.Default,fontWeight=if(bold) FontWeight.Bold else FontWeight.Normal))
             drawText(m,topLeft=Offset(if(center) x-m.size.width/2f else x,y-m.size.height/2f))
           }
-          @Composable fun Ico(p:Path,c:Color,s:Int=16,glow:Boolean=true){ Canvas(Modifier.size(s.dp)){ icon(p,c,Offset(size.width/2,size.height/2),size.width,glow) } }
+          @Composable fun Ico(p:Path,c:Color,s:Int=16,glow:Boolean=true){ Canvas(Modifier.size(s.dp)){ icon(p,c,Offset(size.width/2,size.height/2),size.width*(if(Th.cur.style==2) 0.7f else 1f),glow) } }
 
           @Composable fun Hero(x:Lux,rt:String){
             val t by rememberInfiniteTransition(label="f").animateFloat(0f,1f,infiniteRepeatable(tween(900,easing=LinearEasing)),label="p")
@@ -1040,7 +1046,7 @@ jobs:
             Canvas(Modifier.fillMaxWidth().aspectRatio(358f/290f)){
               val k=size.width/358f
               fun P(a:Float,b:Float)=Offset(a*k,b*k)
-              fun flow(a:Offset,b:Offset,on:Boolean,col:Color)=drawLine(if(on) col else Color(0xFF2A3440),a,b,3f*k,
+              fun flow(a:Offset,b:Offset,on:Boolean,col:Color)=drawLine(if(on) col else LINE2,a,b,3f*k,
                 pathEffect=if(on) PathEffect.dashPathEffect(floatArrayOf(4*k,6*k),(1f-t)*10*k) else null)
               fun pill(px:Float,py:Float,w:Float,h:Float,col:Color,fill:Color,ic:Path,lab:String,v:String,sub:String,tx:Float,vs:Float){
                 drawRoundRect(fill,P(px,py),Size(w*k,h*k),CornerRadius(14*k))
@@ -1051,20 +1057,20 @@ jobs:
               flow(P(179f,68f),P(179f,90f),x.pv>20,AMBER)
               if(x.gridOut>20) flow(P(119f,150f),P(100f,150f),true,CYAN) else flow(P(100f,150f),P(119f,150f),x.gridIn>20,BLUE)
               flow(P(239f,150f),P(258f,150f),x.load>20,VIOLET)
-              drawCircle(Color(0xFF17212C),60*k,c,style=Stroke(10*k))
+              drawCircle(TRACK,60*k,c,style=Stroke(10*k))
               drawArc(Brush.linearGradient(if(x.soc>20) listOf(CYAN,GREEN) else listOf(AMBER,RED),P(119f,90f),P(239f,210f)),-90f,360f*x.soc/100f,false,
                 c-Offset(60*k,60*k),Size(120*k,120*k),style=Stroke(10*k,cap=StrokeCap.Round))
-              drawCircle(Color(0xFF0A1017),46*k,c); drawCircle(LINE,46*k,c,style=Stroke(k))
+              drawCircle(DEEP,46*k,c); drawCircle(LINE,46*k,c,style=Stroke(k))
               icon(I_BAT,GREEN,P(179f,116f),16*k)
               label(tm,"${x.soc}%",179*k,141*k,28*k,WHITE,mono=true,bold=true,center=true)
               val st=if(x.charge>20) "CHARGING "+kw(x.charge) else if(x.discharge>20) "DISCHARGING "+kw(x.discharge) else "IDLE \u00B7 0 W"
               label(tm,st,179*k,167*k,9*k,GREEN,center=true)
               val gs="${x.vGrid.toInt()}V ${"%.1f".format(x.fGrid)}Hz"
-              pill(84f,2f,190f,66f,AMBER,Color(0xFF16130A),I_SOL,"SOLAR  (S1 \u00B7 S2 \u00B7 S3)",kw(x.pv),"${x.pv1} \u00B7 ${x.pv2} \u00B7 ${x.pv3} W",126f,18f)
-              if(x.gridOut>20||x.gridIn<=20) pill(2f,118f,98f,64f,CYAN,Color(0xFF08161B),I_GRID,"EXPORT",kw(x.gridOut),gs,34f,14f)
-              else pill(2f,118f,98f,64f,BLUE,Color(0xFF08121F),I_GRID,"IMPORT",kw(x.gridIn),gs,34f,14f)
-              pill(258f,118f,98f,64f,VIOLET,Color(0xFF130F1F),I_HOME,"HOME",kw(x.load),if(x.vEps>0) "${x.vEps.toInt()} V" else "\u2013 V",290f,14f)
-              drawRoundRect(Color(0xFF0A1017),P(59f,232f),Size(240*k,46*k),CornerRadius(23*k))
+              pill(84f,2f,190f,66f,AMBER,AMBER.copy(alpha=.12f),I_SOL,"SOLAR  (S1 \u00B7 S2 \u00B7 S3)",kw(x.pv),"${x.pv1} \u00B7 ${x.pv2} \u00B7 ${x.pv3} W",126f,18f)
+              if(x.gridOut>20||x.gridIn<=20) pill(2f,118f,98f,64f,CYAN,CYAN.copy(alpha=.12f),I_GRID,"EXPORT",kw(x.gridOut),gs,34f,14f)
+              else pill(2f,118f,98f,64f,BLUE,BLUE.copy(alpha=.12f),I_GRID,"IMPORT",kw(x.gridIn),gs,34f,14f)
+              pill(258f,118f,98f,64f,VIOLET,VIOLET.copy(alpha=.12f),I_HOME,"HOME",kw(x.load),if(x.vEps>0) "${x.vEps.toInt()} V" else "\u2013 V",290f,14f)
+              drawRoundRect(DEEP,P(59f,232f),Size(240*k,46*k),CornerRadius(23*k))
               drawRoundRect(LINE,P(59f,232f),Size(240*k,46*k),CornerRadius(23*k),style=Stroke(k))
               icon(I_RUN,GREEN,P(88f,255f),22*k)
               label(tm,"RUNTIME AT LOAD \u00B7 NO PV",196*k,243*k,9*k,DIM,center=true)
@@ -1084,7 +1090,7 @@ jobs:
                 if(o){ Spacer(Modifier.height(10.dp)); content() } } }
           }
           @Composable fun Kpi(label:String,v:Double,col:Color,ic:Path,mod:Modifier,unit:String="kWh",dec:Int=1){
-            Card(mod,shape=RoundedCornerShape(14.dp),colors=CardDefaults.cardColors(containerColor=Color(0xFF0A0E12))){
+            Card(mod,shape=RoundedCornerShape(14.dp),colors=CardDefaults.cardColors(containerColor=TILE)){
               Column{ Column(Modifier.padding(8.dp,10.dp)){
                 Row(Modifier.fillMaxWidth(),Arrangement.SpaceBetween,Alignment.CenterVertically){ Text(label,fontSize=9.sp,color=DIM); Ico(ic,col,14) }
                 Text("%.${dec}f".format(v),fontSize=18.sp,fontFamily=FontFamily.Monospace,fontWeight=FontWeight.Bold,color=WHITE,modifier=Modifier.padding(top=6.dp)); Text(unit,fontSize=10.sp,color=DIM) }
@@ -1092,15 +1098,15 @@ jobs:
           }
           @Composable fun Ratio(label:String,f:Float,col:Color,ic:Path,mod:Modifier){
             val fr=f.coerceIn(0f,1f)
-            Card(mod,shape=RoundedCornerShape(14.dp),colors=CardDefaults.cardColors(containerColor=Color(0xFF0A0E12))){
+            Card(mod,shape=RoundedCornerShape(14.dp),colors=CardDefaults.cardColors(containerColor=TILE)){
               Column(Modifier.padding(12.dp,10.dp)){
                 Row(Modifier.fillMaxWidth(),Arrangement.SpaceBetween,Alignment.CenterVertically){ Text(label,fontSize=9.sp,color=DIM); Ico(ic,col,14) }
                 Text("${(fr*100).toInt()}%",fontSize=22.sp,fontFamily=FontFamily.Monospace,fontWeight=FontWeight.Bold,color=col)
-                Box(Modifier.padding(top=6.dp).fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)).background(Color(0xFF17212C))){
+                Box(Modifier.padding(top=6.dp).fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)).background(TRACK)){
                   Box(Modifier.fillMaxWidth(maxOf(fr,0.01f)).fillMaxHeight().background(col)) } } }
           }
 
-          val CSER=listOf("Solar" to AMBER,"Battery" to GREEN,"Grid" to CYAN,"Load" to VIOLET,"SOC" to PINK)
+          val CSER:List<Pair<String,Color>> get()=listOf("Solar" to AMBER,"Battery" to GREEN,"Grid" to CYAN,"Load" to VIOLET,"SOC" to PINK)
           val DS:List<List<Float>> = run{
             val sol=ArrayList<Float>();val bat=ArrayList<Float>();val grd=ArrayList<Float>();val con=ArrayList<Float>();val soc=ArrayList<Float>()
             var s=30f
@@ -1124,7 +1130,7 @@ jobs:
                 drawText(t,topLeft=Offset(if(right) x else x-t.size.width,(y-t.size.height/2f).coerceIn(0f,h-t.size.height))) }
               var v=lo
               while(v<=hi+1f){ val y=yP(v)
-                drawLine(if(v==0f) Color(0xFF3A4A5E) else Color(0xFF1B2836),Offset(pl,y),Offset(pl+pw,y),1.dp.toPx(),pathEffect=if(v==0f) null else PathEffect.dashPathEffect(floatArrayOf(6f,8f)))
+                drawLine(if(v==0f) LINE2 else LINE,Offset(pl,y),Offset(pl+pw,y),1.dp.toPx(),pathEffect=if(v==0f) null else PathEffect.dashPathEffect(floatArrayOf(6f,8f)))
                 lab("%.0f".format(v/1000f),pl-4.dp.toPx(),y,DIM,false); v+=step }
               for(s in intArrayOf(0,50,100)) lab("$s%",pl+pw+4.dp.toPx(),h-s/100f*h,PINK,true)
               val zy=yP(0f)
@@ -1222,7 +1228,7 @@ jobs:
                   Text("LUX MONITOR",fontSize=10.sp,letterSpacing=3.sp,fontWeight=FontWeight.Bold,color=CYAN)
                   Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)){
                     Text(brand.uppercase(),fontSize=20.sp,letterSpacing=2.sp,fontWeight=FontWeight.Bold,color=WHITE)
-                    if(model.isNotBlank()) Box(Modifier.clip(RoundedCornerShape(8.dp)).background(Color(0xFF0F2A33)).padding(8.dp,3.dp)){
+                    if(model.isNotBlank()) Box(Modifier.clip(RoundedCornerShape(8.dp)).background(CHIP).padding(8.dp,3.dp)){
                       Text(model,fontSize=11.sp,fontFamily=FontFamily.Monospace,fontWeight=FontWeight.Bold,color=CYAN) } } }
                 Row(Modifier.clip(RoundedCornerShape(14.dp)).background(CARD).padding(10.dp,6.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(6.dp)){
                   Ico(I_LIVE,srcCol,16); Text(srcLabel,fontSize=11.sp,letterSpacing=1.sp,fontFamily=FontFamily.Monospace,fontWeight=FontWeight.Bold,color=srcCol) } }
@@ -1255,7 +1261,7 @@ jobs:
                   Section("REAL-TIME POWER",I_HIS,CYAN,expanded=true){
                     if(live!=null) Row(Modifier.fillMaxWidth().padding(bottom=8.dp),Arrangement.spacedBy(6.dp)){ listOf("1 h","24 h","7 d").forEachIndexed{i,t->
                       Button({range=i},Modifier.weight(1f),contentPadding=PaddingValues(2.dp),
-                        colors=ButtonDefaults.buttonColors(containerColor=if(i==range) CYAN else Color(0xFF0A0E12),contentColor=if(i==range) Color.Black else WHITE)){Text(t,fontSize=12.sp)} } }
+                        colors=ButtonDefaults.buttonColors(containerColor=if(i==range) CYAN else TILE,contentColor=if(i==range) Color.Black else WHITE)){Text(t,fontSize=12.sp)} } }
                     val cd=if(live==null) DS else chartData(range)
                     Chart(cd)
                     val tl=if(live==null) listOf("00:00","12:00","24:00") else timeLabels(range)
@@ -1264,7 +1270,7 @@ jobs:
                   }
                   Section("BATTERY BANK",I_BAT,GREEN,expanded=true){
                     Text("$cap kWh \u00B7 reserve $res% \u00B7 ${x.vBat} V",fontSize=12.sp,fontFamily=FontFamily.Monospace,color=DIM)
-                    Box(Modifier.padding(top=10.dp).fillMaxWidth().height(10.dp).clip(RoundedCornerShape(5.dp)).background(Color(0xFF17212C))){
+                    Box(Modifier.padding(top=10.dp).fillMaxWidth().height(10.dp).clip(RoundedCornerShape(5.dp)).background(TRACK)){
                       Box(Modifier.fillMaxWidth(maxOf(x.soc/100f,0.01f)).fillMaxHeight().background(Brush.horizontalGradient(listOf(CYAN,GREEN)))) }
                     Text("Charge ${"%.1f".format(x.chgDay)} kWh \u00B7 discharge ${"%.1f".format(x.dischgDay)} kWh today",fontSize=11.sp,color=DIM,modifier=Modifier.padding(top=8.dp))
                   }
@@ -1292,7 +1298,7 @@ jobs:
                         f.rows.forEach{ r->
                           Row(Modifier.fillMaxWidth().padding(vertical=4.dp),verticalAlignment=Alignment.CenterVertically){
                             Text(LocalDate.parse(r.date).format(java.time.format.DateTimeFormatter.ofPattern("EEE d")),fontSize=11.sp,color=WHITE,modifier=Modifier.width(52.dp))
-                            Box(Modifier.weight(1f).height(6.dp).clip(RoundedCornerShape(3.dp)).background(Color(0xFF17212C))){ Box(Modifier.fillMaxWidth((r.prod/mp).toFloat().coerceIn(0.02f,1f)).fillMaxHeight().background(AMBER)) }
+                            Box(Modifier.weight(1f).height(6.dp).clip(RoundedCornerShape(3.dp)).background(TRACK)){ Box(Modifier.fillMaxWidth((r.prod/mp).toFloat().coerceIn(0.02f,1f)).fillMaxHeight().background(AMBER)) }
                             Text("%.0f".format(r.prod),fontSize=11.sp,fontFamily=FontFamily.Monospace,color=AMBER,textAlign=TextAlign.End,modifier=Modifier.width(34.dp))
                             Text("%+.0f".format(r.net),fontSize=11.sp,fontFamily=FontFamily.Monospace,color=if(r.net>=0) CYAN else RED,textAlign=TextAlign.End,modifier=Modifier.width(54.dp))
                             Text(nv(r.net),fontSize=11.sp,fontFamily=FontFamily.Monospace,color=WHITE,textAlign=TextAlign.End,modifier=Modifier.width(54.dp)) } }
@@ -1352,6 +1358,7 @@ jobs:
                 } else if(tab==1){
                   ExtrasTab(sp){wall=true}
                 } else {
+                  AppearanceCard(sp)
                   PrefField(sp,"brand","Brand shown on the main screen","LuxPower")
                   PrefField(sp,"model","Model shown on the main screen","LXP-LB-EU 12K")
                   OutlinedTextField(host,{host=it},label={Text("Dongle IP")},singleLine=true,modifier=Modifier.fillMaxWidth())
@@ -1383,7 +1390,7 @@ jobs:
                     startMonitor(ctx); fcKey++; tab=0},Modifier.fillMaxWidth()){Text("Save & connect")}
                 }
               }
-              Row(Modifier.fillMaxWidth().background(Color(0xFF0A1017)).navigationBarsPadding()){
+              Row(Modifier.fillMaxWidth().background(DEEP).navigationBarsPadding()){
                 NavItem("Live",I_LIVE,tab==0,Modifier.weight(1f)){tab=0}
                 NavItem("Extras",I_EXTRA,tab==1,Modifier.weight(1f)){tab=1}
                 NavItem("Settings",I_SET,tab==2,Modifier.weight(1f)){tab=2} }
@@ -1652,6 +1659,60 @@ jobs:
               if(ogMsg.isNotEmpty()) Text(ogMsg,fontSize=12.sp,color=WHITE)
               Text("Estimates use your recorded usage, the sun forecast and 94% battery efficiency. Treat them as a guide and have an installer confirm before disconnecting from the grid.",fontSize=11.sp,color=DIM,modifier=Modifier.padding(top=6.dp))
             }
+          }
+          EOF
+          cat > app/src/main/java/com/lux/monitor/Themes.kt <<'EOF'
+          package com.lux.monitor
+          import android.content.SharedPreferences
+          import androidx.compose.foundation.background
+          import androidx.compose.foundation.clickable
+          import androidx.compose.foundation.layout.*
+          import androidx.compose.foundation.shape.CircleShape
+          import androidx.compose.foundation.shape.RoundedCornerShape
+          import androidx.compose.material3.*
+          import androidx.compose.runtime.*
+          import androidx.compose.ui.Alignment
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.draw.clip
+          import androidx.compose.ui.graphics.Color
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.unit.dp
+          import androidx.compose.ui.unit.sp
+
+          /** style: 0 = line icons, 1 = solid duotone icons, 2 = badge-tile icons */
+          class ThemeDef(val name:String,val blurb:String,val style:Int,
+            val bg:Color,val card:Color,val line:Color,val line2:Color,val dim:Color,val text:Color,val tile:Color,val track:Color,val deep:Color,val chip:Color,
+            val solar:Color,val grid:Color,val gridIn:Color,val home:Color,val battery:Color,val soc:Color)
+
+          object Th{
+            val list=listOf(
+              ThemeDef("Midnight Neon","Deep navy with neon accents and clean line icons",0,
+                Color(0xFF070B10),Color(0xFF0C131B),Color(0xFF1B2836),Color(0xFF3A4A5E),Color(0xFF9AA8BA),Color(0xFFE6EDF5),Color(0xFF0A0E12),Color(0xFF17212C),Color(0xFF0A1017),Color(0xFF0F2A33),
+                Color(0xFFFBBF24),Color(0xFF22D3EE),Color(0xFF60A5FA),Color(0xFFA78BFA),Color(0xFF34D399),Color(0xFFF472B6)),
+              ThemeDef("Ember","Warm charcoal with sunset colours and solid duotone icons",1,
+                Color(0xFF0F0A08),Color(0xFF1A120E),Color(0xFF2E2019),Color(0xFF4A3426),Color(0xFFB5A296),Color(0xFFF5EBE4),Color(0xFF130D0A),Color(0xFF2A1D16),Color(0xFF120C09),Color(0xFF3A2212),
+                Color(0xFFFFC233),Color(0xFFFF8A3D),Color(0xFFFF5E5E),Color(0xFFE879F9),Color(0xFFA3E635),Color(0xFFFDE68A)),
+              ThemeDef("Arctic","Cool slate with icy pastels and badge-style icons",2,
+                Color(0xFF0B1220),Color(0xFF111B2E),Color(0xFF1E2B44),Color(0xFF3B4C6B),Color(0xFF93A4C0),Color(0xFFE8F0FF),Color(0xFF0D1526),Color(0xFF1A2740),Color(0xFF0C1424),Color(0xFF12304A),
+                Color(0xFFFFD97A),Color(0xFF7DD3FC),Color(0xFFA5B4FC),Color(0xFFC4B5FD),Color(0xFF6EE7B7),Color(0xFFF9A8D4)))
+            var idx by mutableStateOf(0)
+            val cur:ThemeDef get()=list[idx.coerceIn(0,list.size-1)]
+          }
+
+          @Composable fun AppearanceCard(sp:SharedPreferences){
+            Card(Modifier.fillMaxWidth(),shape=RoundedCornerShape(14.dp),colors=CardDefaults.cardColors(containerColor=CARD)){
+              Column(Modifier.padding(12.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){
+                Text("Appearance",fontSize=13.sp,fontWeight=FontWeight.SemiBold,color=WHITE)
+                Th.list.forEachIndexed{ i,t->
+                  val sel=Th.idx==i
+                  Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(if(sel) TRACK else TILE)
+                    .clickable{ Th.idx=i; sp.edit().putString("theme",i.toString()).apply() }.padding(10.dp),verticalAlignment=Alignment.CenterVertically){
+                    Column(Modifier.weight(1f)){
+                      Text(t.name,fontSize=13.sp,fontWeight=FontWeight.Bold,color=WHITE)
+                      Text(t.blurb,fontSize=11.sp,color=DIM)
+                      Row(Modifier.padding(top=6.dp),horizontalArrangement=Arrangement.spacedBy(6.dp)){
+                        listOf(t.solar,t.grid,t.gridIn,t.home,t.battery,t.soc).forEach{ Box(Modifier.size(14.dp).clip(CircleShape).background(it)) } } }
+                    if(sel) Text("Selected",fontSize=11.sp,fontWeight=FontWeight.Bold,color=GREEN) } } } }
           }
           EOF
           cat > app/src/main/java/com/lux/monitor/Widget.kt <<'EOF'
