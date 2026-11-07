@@ -62,6 +62,7 @@ jobs:
           <action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/>
           </intent-filter></activity><service android:name=".MonitorService" android:exported="false" android:foregroundServiceType="specialUse"><property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Local inverter monitoring"/></service>
           <receiver android:name=".LuxWidget" android:exported="true"><intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE"/></intent-filter><meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_info"/></receiver>
+          <receiver android:name=".LuxFlowWidget" android:exported="true"><intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE"/></intent-filter><meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_flow_info"/></receiver>
           <receiver android:name=".BootReceiver" android:exported="true"><intent-filter><action android:name="android.intent.action.BOOT_COMPLETED"/></intent-filter></receiver>
           </application></manifest>
           EOF
@@ -319,6 +320,7 @@ jobs:
               Text("Uses your real load between the grid start and sun takeover, 94% efficiency and your ${res}% reserve. Average import is what the grid supplied in that window.",fontSize=11.sp,color=DIM,modifier=Modifier.padding(top=4.dp))
             }
 
+            LoadInsightsCard(sp)
             OffGridCard(sp)
 
             var confirm by remember{mutableStateOf(false)}
@@ -369,6 +371,8 @@ jobs:
               if(ct!=null) Text("Battery cell spread: ${ct.first.toInt()} mV over the last 7 days vs ${ct.second.toInt()} mV before"+(if(ct.first>ct.second+30) " - rising, worth watching." else "."),fontSize=12.sp,color=if(ct.first>ct.second+30) AMBER else WHITE,modifier=Modifier.padding(top=8.dp))
               else Text("Cell spread trend needs 4 or more recorded days.",fontSize=11.sp,color=DIM,modifier=Modifier.padding(top=8.dp))
             }
+
+            HealthTrendsCard(sp)
 
             Section("BILL ESTIMATOR & TIME-OF-USE",I_GRID,BLUE){
               PrefField(sp,"fx","Fixed monthly charge","0")
@@ -435,7 +439,7 @@ jobs:
           class FRes(val rows:List<FDay>,val k:Double,val n:Int,val err:Double,val note:String,val cons:Double,val bat:Double)
 
           fun fetchForecast(lat:String,lon:String):Fc?{
-            val u=URL("https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lon&daily=shortwave_radiation_sum&hourly=shortwave_radiation&timezone=auto&past_days=14&forecast_days=7")
+            val u=URL("https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lon&daily=shortwave_radiation_sum&hourly=shortwave_radiation&timezone=auto&past_days=60&forecast_days=7")
             val c=u.openConnection() as HttpURLConnection; c.connectTimeout=8000; c.readTimeout=8000
             val root=JSONObject(c.inputStream.bufferedReader().readText()); val j=root.getJSONObject("daily")
             val hj=root.getJSONObject("hourly"); val ht=hj.getJSONArray("time"); val hr=hj.getJSONArray("shortwave_radiation")
@@ -562,7 +566,11 @@ jobs:
             fun put(ctx:Context,x:Lux){
               init(ctx); val key=LocalDate.now().toString()
               val dm=maxOf(days[key]?.getOrNull(9)?:0.0,if(x.cellMaxV>0) (x.cellMaxV-x.cellMinV)*1000.0 else 0.0)
-              days[key]=listOf(x.yld,x.cons,x.impDay,x.expDay,x.chgDay,x.dischgDay,x.e1,x.e2,x.e3,dm)
+              val old=days[key]
+              val soh=if(x.soh>0) x.soh.toDouble() else (old?.getOrNull(10)?:0.0)
+              val cyc=if(x.cycles>0) x.cycles.toDouble() else (old?.getOrNull(11)?:0.0)
+              val tm=maxOf(old?.getOrNull(12)?:0.0,x.tInv)
+              days[key]=listOf(x.yld,x.cons,x.impDay,x.expDay,x.chgDay,x.dischgDay,x.e1,x.e2,x.e3,dm,soh,cyc,tm)
               val n=System.currentTimeMillis(); if(n-last<60000) return; last=n
               flush()
             }
@@ -613,6 +621,149 @@ jobs:
               file!!.writeText(rows.entries.sortedBy{it.key}.joinToString(""){"${it.key},${it.value.joinToString(",")}\n"})
               Daily.flush()
               return if(m+d==0) "No usable rows found" else "Imported $m months and $d days"
+            }
+          }
+          EOF
+          cat > app/src/main/java/com/lux/monitor/Insights.kt <<'EOF'
+          package com.lux.monitor
+          import android.content.SharedPreferences
+          import androidx.compose.foundation.layout.*
+          import androidx.compose.material3.*
+          import androidx.compose.runtime.*
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.text.font.FontFamily
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.unit.dp
+          import androidx.compose.ui.unit.sp
+          import java.time.Instant
+          import java.time.LocalDate
+          import java.time.ZoneId
+          import java.time.format.DateTimeFormatter
+
+          class Ev(val t:Long,val watts:Double,val minutes:Int,val kwh:Double)
+          class Sig(val bucket:Int,val n:Int,val kwh:Double,val avgMin:Double)
+
+          /** Finds appliance-style load steps (rise of 700 W or more that later drops back) in the last 7 days of 1-minute history. */
+          fun loadEvents():List<Ev>{
+            val pts=History.pts.toList().sortedBy{it.t}
+            if(pts.size<300) return emptyList()
+            val l=pts.map{ it.load.toDouble() }
+            fun med(a:Int,b:Int):Double{ val s=l.subList(a,b).sorted(); return s[s.size/2] }
+            val out=ArrayList<Ev>(); var i=6
+            while(i<pts.size-8){
+              if(pts[i+6].t-pts[i-6].t>14*60000L){ i++; continue }
+              val pre=med(i-6,i-1); val d=med(i+1,i+6)-pre
+              if(d>=700){
+                var j=i+6; var end=-1
+                while(j<pts.size-5&&j<i+360){
+                  if(pts[j].t-pts[j-1].t>5*60000L) break
+                  if(med(j,j+5)<pre+0.3*d){ end=j; break }
+                  j++ }
+                if(end>0){
+                  var e=0.0
+                  for(k in i until end){ val dt=minOf(pts[k+1].t-pts[k].t,300000L)/3600000.0; e+=maxOf(0.0,l[k]-pre)*dt/1000.0 }
+                  val minutes=((pts[end].t-pts[i].t)/60000).toInt()
+                  if(minutes>=3) out.add(Ev(pts[i].t,d,minutes,e))
+                  i=end } else i+=6
+              } else i++
+            }
+            return out
+          }
+          fun signatures(ev:List<Ev>):List<Sig> =
+            ev.groupBy{ (Math.round(it.watts/300.0)*300).toInt() }.filter{ it.value.size>=2 }
+              .map{ (b,l)-> Sig(b,l.size,l.sumOf{it.kwh},l.map{it.minutes}.average()) }.sortedByDescending{it.kwh}
+          fun guessLoad(w:Int,n:Int,min:Double):String=when{
+            w>=5000 -> "EV charger or large heat pump"
+            w>=2500&&min>=20 -> "Dryer, oven or water heater"
+            w in 1000..2500&&n>=10 -> "A/C or compressor cycling"
+            w in 1000..2500 -> "Appliance (iron, kettle, heater)"
+            w in 600..1000&&min>=60 -> "Pool pump or dehumidifier"
+            else -> "Small appliance" }
+          /** Always-on load: the 10th percentile of each day's load, averaged. */
+          fun baselineW():Double?{
+            val z=ZoneId.systemDefault()
+            val v=History.pts.toList().groupBy{ Instant.ofEpochMilli(it.t).atZone(z).toLocalDate() }.values.filter{it.size>=600}
+              .map{ val s=it.map{p->p.load}.sorted(); s[s.size/10].toDouble() }
+            return if(v.isEmpty()) null else v.average()
+          }
+
+          @Composable fun ColumnScope.LoadInsightsCard(sp:SharedPreferences){
+            val ri=sp.getString("ri","0.25")!!.toDoubleOrNull()?:0.0; val cur=sp.getString("cu","$")!!
+            val key=History.pts.size/60
+            val sigs=remember(key){ signatures(loadEvents()) }
+            val base=remember(key){ baselineW() }
+            val peak=History.pts.toList().maxByOrNull{it.load}
+            val ld=LocalDate.now()
+            val yest=Daily.days[ld.minusDays(1).toString()]?.get(1)
+            val prior=(2..8).mapNotNull{ Daily.days[ld.minusDays(it.toLong()).toString()]?.get(1) }
+            Section("WHAT USED THE POWER",I_HOME,VIOLET,summary=base?.let{ "always-on "+fm(it)+" W" }?:""){
+              if(History.pts.size<300) Text("Needs a day or two of recorded history. Keep the app running in the background.",fontSize=12.sp,color=AMBER)
+              if(base!=null){
+                val eDay=prior.takeIf{it.isNotEmpty()}?.average()
+                Bullet("Always-on load: about ${fm(base)} W, which is ${fm(base*24/1000.0,1)} kWh a day"+(if(eDay!=null&&eDay>1) " (${fm(base*24/1000.0/eDay*100)}% of your use)." else ".")) }
+              if(peak!=null) Bullet("Highest load recorded: ${fm(peak.load/1000.0,1)} kW on "+Instant.ofEpochMilli(peak.t).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("EEE HH:mm"))+".")
+              if(yest!=null&&prior.size>=3){ val a=prior.average()
+                Bullet("Yesterday you used ${fm(yest,1)} kWh, ${if(yest>=a) fm((yest/a-1)*100)+"% above" else fm((1-yest/a)*100)+"% below"} your previous week's average of ${fm(a,1)} kWh.") }
+              if(sigs.isNotEmpty()){
+                Text("Biggest repeating loads (last 7 days)",fontSize=12.sp,fontWeight=FontWeight.Bold,color=WHITE,modifier=Modifier.padding(top=8.dp))
+                sigs.take(4).forEach{ s->
+                  val nm=sp.getString("sig${s.bucket}","")!!.ifBlank{ guessLoad(s.bucket,s.n,s.avgMin) }
+                  Column(Modifier.padding(vertical=4.dp)){
+                    Row(Modifier.fillMaxWidth(),Arrangement.SpaceBetween){
+                      Text(nm,fontSize=13.sp,fontWeight=FontWeight.Bold,color=WHITE,modifier=Modifier.weight(1f))
+                      Text(fm(s.bucket/1000.0,1)+" kW",fontSize=12.sp,fontFamily=FontFamily.Monospace,color=AMBER) }
+                    Text("${s.n} runs, about ${fm(s.avgMin)} min each, ${fm(s.kwh,1)} kWh ($cur${fm(s.kwh*ri,2)}) in 7 days",fontSize=11.sp,color=DIM) } }
+                Text("The names are guesses from power size and run time. Type your own to remember them:",fontSize=11.sp,color=DIM,modifier=Modifier.padding(top=6.dp))
+                sigs.take(3).forEach{ PrefField(sp,"sig${it.bucket}","Name the "+fm(it.bucket/1000.0,1)+" kW load","") }
+              } else if(History.pts.size>=300) Text("No repeating appliance-sized loads found yet.",fontSize=12.sp,color=DIM)
+            }
+          }
+
+          @Composable fun TrendRow(label:String,now:String,note:String,ok:Boolean?){
+            Column(Modifier.padding(vertical=4.dp)){
+              Row(Modifier.fillMaxWidth(),Arrangement.SpaceBetween){
+                Text(label,fontSize=12.sp,color=WHITE,modifier=Modifier.weight(1f))
+                Text(now,fontSize=12.sp,fontFamily=FontFamily.Monospace,fontWeight=FontWeight.Bold,color=if(ok==null) DIM else if(ok) GREEN else AMBER) }
+              Text(note,fontSize=11.sp,color=DIM) }
+          }
+          fun med(l:List<Double>):Double?=if(l.size<3) null else l.sorted()[l.size/2]
+
+          @Composable fun ColumnScope.HealthTrendsCard(sp:SharedPreferences){
+            val today=LocalDate.now()
+            val ds=Daily.days.entries.filter{ it.key<today.toString() }.sortedBy{it.key}
+            fun eff(l:List<Map.Entry<String,List<Double>>>):Double?{ val c=l.sumOf{it.value[4]}; val d=l.sumOf{it.value[5]}; return if(c>5) d/c*100 else null }
+            val effNow=eff(ds.takeLast(7)); val effBefore=eff(ds.dropLast(7).takeLast(21))
+            val fc=Store.fc
+            val ratios=fc?.let{ f-> f.dates.indices.filter{ f.dates[it]<today.toString() }.mapNotNull{ i->
+              val y=Daily.days[f.dates[i]]?.get(0); if(y!=null&&y>1&&f.rad[i]>1.0) y/f.rad[i] else null } }
+            val rNow=ratios?.takeLast(7)?.let{ med(it) }; val rBefore=ratios?.dropLast(7)?.let{ med(it) }
+            val sohL=ds.filter{ it.value.size>10&&it.value[10]>0 }
+            val sohNow=sohL.lastOrNull()?.value?.get(10)
+            val soh30=sohL.firstOrNull{ it.key>=today.minusDays(30).toString() }?.value?.get(10)
+            val cycL=ds.filter{ it.value.size>11&&it.value[11]>0 }
+            val cycNow=cycL.lastOrNull()?.value?.get(11)
+            val cyc30=cycL.firstOrNull{ it.key>=today.minusDays(30).toString() }
+            val cycRate=if(cycNow!=null&&cyc30!=null){ val dd=java.time.temporal.ChronoUnit.DAYS.between(LocalDate.parse(cyc30.key),LocalDate.parse(cycL.last().key)); if(dd>=7) (cycNow-cyc30.value[11])/dd else null } else null
+            val ct=cellTrend()
+            val sh=panelHealth()
+            var score=100; val issues=ArrayList<String>()
+            if(effNow!=null&&effBefore!=null&&effNow<effBefore-3){ score-=15; issues.add("battery efficiency") }
+            if(rNow!=null&&rBefore!=null&&rNow<rBefore*0.93){ score-=if(rNow<rBefore*0.88) 30 else 20; issues.add("solar yield") }
+            if(sohNow!=null&&sohNow<95){ score-=10; issues.add("battery health") }
+            if(sohNow!=null&&soh30!=null&&sohNow<soh30-1){ score-=10; issues.add("battery health trend") }
+            if(ct!=null&&(ct.first>100||ct.first>ct.second+30)){ score-=15; issues.add("cell spread") }
+            if(sh!=null&&sh.any{ it.share<it.normal*0.85 }){ score-=10; issues.add("a solar string") }
+            val label=if(score>=85) "Good" else if(score>=65) "Watch" else "Attention"
+            Section("HEALTH & EFFICIENCY TRENDS",I_TMP,CYAN,summary="$label $score"){
+              Text(if(issues.isEmpty()) "Everything with enough data looks healthy." else "Worth a look: "+issues.joinToString(", ")+".",fontSize=13.sp,fontWeight=FontWeight.Bold,color=if(issues.isEmpty()) GREEN else AMBER,modifier=Modifier.padding(bottom=4.dp))
+              if(effNow!=null) TrendRow("Battery round-trip efficiency",fm(effNow)+"%",if(effBefore!=null) "Previous 3 weeks: ${fm(effBefore)}%. Includes inverter losses; typical is about 88 to 94%." else "Needs more weeks of data to compare.",if(effBefore==null) null else effNow>=effBefore-3)
+              else TrendRow("Battery round-trip efficiency","needs data","Needs a week of recorded charge and discharge totals.",null)
+              if(rNow!=null) TrendRow("Solar yield per unit of sunshine",fm(rNow,1)+" kWh",if(rBefore!=null) "Earlier: ${fm(rBefore,1)} kWh (${if(rNow>=rBefore) "+" else ""}${fm((rNow/rBefore-1)*100)}%). A steady drop over weeks can mean dirty or shaded panels; rain often resets it." else "Needs 3 weeks of daily yield to compare.",if(rBefore==null) null else rNow>=rBefore*0.93)
+              else TrendRow("Solar yield per unit of sunshine","needs data","Needs your location in Settings and at least 3 recorded sunny days.",null)
+              if(sohNow!=null) TrendRow("Battery state of health",fm(sohNow)+"%",if(soh30!=null) "30 days ago: ${fm(soh30)}%." else "Trend appears after a month of data.",sohNow>=95&&(soh30==null||sohNow>=soh30-1))
+              if(cycNow!=null) TrendRow("Battery cycles",fm(cycNow),if(cycRate!=null&&cycRate>0.01) "About ${fm(cycRate,2)} cycles a day. At that rate 6000 cycles (the V5 rating) is roughly ${fm(6000/cycRate/365,0)} years away." else "Cycle rate appears after a week of data.",null)
+              if(ct!=null) TrendRow("Battery cell spread",fm(ct.first)+" mV","Before: ${fm(ct.second)} mV. Under about 50 mV is healthy; a steady climb suggests a weak cell or balance problem.",ct.first<=100&&ct.first<=ct.second+30)
+              Text("Trends compare the last 7 days with the weeks before. Weather, temperature and missing days can shift them, so look for steady changes, not single bad days.",fontSize=11.sp,color=DIM,modifier=Modifier.padding(top=6.dp))
             }
           }
           EOF
@@ -1002,7 +1153,9 @@ jobs:
             override fun onCreate(b:Bundle?){super.onCreate(b)
               val sp=getSharedPreferences("c",0)
               History.init(this); Daily.init(this); Monthly.init(this)
-              Th.idx=sp.getString("theme","0")!!.toIntOrNull()?:0
+              val tm0=sp.getString("theme","0")!!
+              Th.auto=tm0=="auto"; Th.dayIdx=sp.getString("autoDay","2")!!.toIntOrNull()?:2
+              Th.idx=if(Th.auto) (if(isNight(sp)) 1 else Th.dayIdx) else (tm0.toIntOrNull()?:0)
               if(android.os.Build.VERSION.SDK_INT>=33) requestPermissions(arrayOf("android.permission.POST_NOTIFICATIONS"),1)
               setContent{MaterialTheme(colorScheme=darkColorScheme()){Surface(Modifier.fillMaxSize(),color=BG){Screen(viewModel(),sp)}}}}
           }
@@ -1217,6 +1370,7 @@ jobs:
               val got=if(la.isEmpty()||lo.isEmpty()) null else withContext(Dispatchers.IO){ runCatching{fetchForecast(la,lo)}.getOrNull() }
               if(got!=null||la.isEmpty()) Store.fc=got }
             LaunchedEffect(Unit){ startMonitor(ctx) }
+            LaunchedEffect(Th.auto){ while(Th.auto){ Th.idx=if(isNight(sp)) 1 else Th.dayIdx; delay(60000) } }
             val live=Store.d
             Box(Modifier.fillMaxSize()){
             Column(Modifier.fillMaxSize().statusBarsPadding()){
@@ -1678,11 +1832,35 @@ jobs:
           import androidx.compose.ui.text.font.FontWeight
           import androidx.compose.ui.unit.dp
           import androidx.compose.ui.unit.sp
+          import java.time.Instant
+          import java.time.LocalDate
+          import java.time.ZoneId
 
           /** style: 0 = line icons, 1 = solid duotone icons, 2 = badge-tile icons */
           class ThemeDef(val name:String,val blurb:String,val style:Int,
             val bg:Color,val card:Color,val line:Color,val line2:Color,val dim:Color,val text:Color,val tile:Color,val track:Color,val deep:Color,val chip:Color,
             val solar:Color,val grid:Color,val gridIn:Color,val home:Color,val battery:Color,val soc:Color)
+
+          /** Sunrise and sunset as local minutes after midnight (NOAA approximation), or null in polar day/night. */
+          fun sunTimes(lat:Double,lon:Double,d:LocalDate):Pair<Int,Int>?{
+            val n=d.dayOfYear; val b=2*Math.PI*(n-1)/365.0
+            val eq=229.18*(0.000075+0.001868*Math.cos(b)-0.032077*Math.sin(b)-0.014615*Math.cos(2*b)-0.040849*Math.sin(2*b))
+            val decl=0.006918-0.399912*Math.cos(b)+0.070257*Math.sin(b)-0.006758*Math.cos(2*b)+0.000907*Math.sin(2*b)-0.002697*Math.cos(3*b)+0.00148*Math.sin(3*b)
+            val la=Math.toRadians(lat)
+            val c=(Math.cos(Math.toRadians(90.833))-Math.sin(la)*Math.sin(decl))/(Math.cos(la)*Math.cos(decl))
+            if(c>1||c<-1) return null
+            val h=Math.toDegrees(Math.acos(c))
+            val off=ZoneId.systemDefault().rules.getOffset(Instant.now()).totalSeconds/60
+            val rise=(720-4*(lon+h)-eq+off).toInt(); val set=(720-4*(lon-h)-eq+off).toInt()
+            return Pair(((rise%1440)+1440)%1440,((set%1440)+1440)%1440)
+          }
+          fun isNight(sp:SharedPreferences):Boolean{
+            val lat=sp.getString("lat","")!!.toDoubleOrNull(); val lon=sp.getString("lon","")!!.toDoubleOrNull()
+            val t=java.time.LocalTime.now(); val now=t.hour*60+t.minute
+            val st=if(lat!=null&&lon!=null) sunTimes(lat,lon,LocalDate.now()) else null
+            val rise=st?.first?:390; val set=st?.second?:1110
+            return if(rise<set) now<rise||now>=set else now in set until rise
+          }
 
           object Th{
             val list=listOf(
@@ -1696,6 +1874,8 @@ jobs:
                 Color(0xFF0B1220),Color(0xFF111B2E),Color(0xFF1E2B44),Color(0xFF3B4C6B),Color(0xFF93A4C0),Color(0xFFE8F0FF),Color(0xFF0D1526),Color(0xFF1A2740),Color(0xFF0C1424),Color(0xFF12304A),
                 Color(0xFFFFD97A),Color(0xFF7DD3FC),Color(0xFFA5B4FC),Color(0xFFC4B5FD),Color(0xFF6EE7B7),Color(0xFFF9A8D4)))
             var idx by mutableStateOf(0)
+            var auto by mutableStateOf(false)
+            var dayIdx by mutableStateOf(2)
             val cur:ThemeDef get()=list[idx.coerceIn(0,list.size-1)]
           }
 
@@ -1704,15 +1884,27 @@ jobs:
               Column(Modifier.padding(12.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){
                 Text("Appearance",fontSize=13.sp,fontWeight=FontWeight.SemiBold,color=WHITE)
                 Th.list.forEachIndexed{ i,t->
-                  val sel=Th.idx==i
+                  val sel=!Th.auto&&Th.idx==i
                   Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(if(sel) TRACK else TILE)
-                    .clickable{ Th.idx=i; sp.edit().putString("theme",i.toString()).apply() }.padding(10.dp),verticalAlignment=Alignment.CenterVertically){
+                    .clickable{ Th.auto=false; Th.idx=i; sp.edit().putString("theme",i.toString()).apply() }.padding(10.dp),verticalAlignment=Alignment.CenterVertically){
                     Column(Modifier.weight(1f)){
                       Text(t.name,fontSize=13.sp,fontWeight=FontWeight.Bold,color=WHITE)
                       Text(t.blurb,fontSize=11.sp,color=DIM)
                       Row(Modifier.padding(top=6.dp),horizontalArrangement=Arrangement.spacedBy(6.dp)){
                         listOf(t.solar,t.grid,t.gridIn,t.home,t.battery,t.soc).forEach{ Box(Modifier.size(14.dp).clip(CircleShape).background(it)) } } }
-                    if(sel) Text("Selected",fontSize=11.sp,fontWeight=FontWeight.Bold,color=GREEN) } } } }
+                    if(sel) Text("Selected",fontSize=11.sp,fontWeight=FontWeight.Bold,color=GREEN) } }
+                Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(if(Th.auto) TRACK else TILE)
+                  .clickable{ Th.auto=true; Th.idx=if(isNight(sp)) 1 else Th.dayIdx; sp.edit().putString("theme","auto").apply() }.padding(10.dp)){
+                  Row(verticalAlignment=Alignment.CenterVertically){
+                    Column(Modifier.weight(1f)){
+                      Text("Auto: Ember at night",fontSize=13.sp,fontWeight=FontWeight.Bold,color=WHITE)
+                      Text("Switches at sunset and sunrise. Uses the location from the forecast settings, otherwise 6:30 and 18:30.",fontSize=11.sp,color=DIM) }
+                    if(Th.auto) Text("Selected",fontSize=11.sp,fontWeight=FontWeight.Bold,color=GREEN) }
+                  if(Th.auto) Row(Modifier.padding(top=8.dp),horizontalArrangement=Arrangement.spacedBy(8.dp),verticalAlignment=Alignment.CenterVertically){
+                    Text("Daytime look:",fontSize=11.sp,color=DIM)
+                    listOf(0 to "Midnight Neon",2 to "Arctic").forEach{ (i,n)->
+                      Button({ Th.dayIdx=i; Th.idx=if(isNight(sp)) 1 else i; sp.edit().putString("autoDay",i.toString()).apply() },contentPadding=PaddingValues(10.dp,2.dp),
+                        colors=ButtonDefaults.buttonColors(containerColor=if(Th.dayIdx==i) CYAN else TILE,contentColor=if(Th.dayIdx==i) Color.Black else WHITE)){ Text(n,fontSize=11.sp) } } } } } }
           }
           EOF
           cat > app/src/main/java/com/lux/monitor/Widget.kt <<'EOF'
@@ -1724,27 +1916,110 @@ jobs:
           import android.content.ComponentName
           import android.content.Context
           import android.content.Intent
+          import android.graphics.Bitmap
+          import android.graphics.Canvas
+          import android.graphics.DashPathEffect
+          import android.graphics.Paint
+          import android.graphics.Typeface
+          import android.os.SystemClock
           import android.widget.RemoteViews
+          import androidx.compose.ui.graphics.toArgb
           import java.time.LocalDate
 
           class LuxWidget:AppWidgetProvider(){
             override fun onUpdate(c:Context,m:AppWidgetManager,ids:IntArray){ for(id in ids) m.updateAppWidget(id,views(c)) }
           }
+          class LuxFlowWidget:AppWidgetProvider(){
+            override fun onUpdate(c:Context,m:AppWidgetManager,ids:IntArray){ for(id in ids) m.updateAppWidget(id,flowViews(c)) }
+          }
           class BootReceiver:BroadcastReceiver(){
             override fun onReceive(c:Context,i:Intent){ if(i.action==Intent.ACTION_BOOT_COMPLETED) startMonitor(c) }
           }
-          fun views(c:Context):RemoteViews{
-            val v=c.getSharedPreferences("c",0).getString("w","")!!.split("|")
-            return RemoteViews(c.packageName,R.layout.widget).apply{
-              intArrayOf(R.id.w_soc,R.id.w_rt,R.id.w_pv,R.id.w_load,R.id.w_tg,R.id.w_te,R.id.w_ti,R.id.w_wg,R.id.w_we,R.id.w_wi)
-                .forEachIndexed{i,id-> setTextViewText(id,v.getOrElse(i){"\u2013"}) }
-              setOnClickPendingIntent(R.id.w_root,PendingIntent.getActivity(c,0,Intent(c,MainActivity::class.java),PendingIntent.FLAG_IMMUTABLE)) }
+
+          /** The widgets follow your chosen theme (including Auto day/night). */
+          fun widgetTheme(c:Context):ThemeDef{
+            val sp=c.getSharedPreferences("c",0); val t=sp.getString("theme","0")!!
+            val i=if(t=="auto") (if(isNight(sp)) 1 else (sp.getString("autoDay","2")!!.toIntOrNull()?:2)) else (t.toIntOrNull()?:0)
+            return Th.list[i.coerceIn(0,Th.list.size-1)]
           }
+          private fun tap(c:Context)=PendingIntent.getActivity(c,0,Intent(c,MainActivity::class.java),PendingIntent.FLAG_IMMUTABLE)
+
+          /** Summary widget: rotates (with a fade) between live status, today's totals and the week. */
+          fun views(c:Context):RemoteViews{
+            val sp=c.getSharedPreferences("c",0); val th=widgetTheme(c)
+            val v=sp.getString("w","")!!.split("|")
+            val rv=RemoteViews(c.packageName,R.layout.widget)
+            intArrayOf(R.id.w_soc,R.id.w_rt,R.id.w_pv,R.id.w_load,R.id.wt_g,R.id.wt_e,R.id.wt_i,R.id.ww_g,R.id.ww_e,R.id.ww_i)
+              .forEachIndexed{ i,id-> rv.setTextViewText(id,v.getOrElse(i){"\u2013"}) }
+            rv.setTextColor(R.id.w_soc,th.battery.toArgb()); rv.setTextColor(R.id.w_rt,th.text.toArgb())
+            rv.setTextColor(R.id.w_pv,th.solar.toArgb()); rv.setTextColor(R.id.w_load,th.home.toArgb())
+            for(id in intArrayOf(R.id.wt_g,R.id.ww_g)) rv.setTextColor(id,th.solar.toArgb())
+            for(id in intArrayOf(R.id.wt_e,R.id.ww_e)) rv.setTextColor(id,th.grid.toArgb())
+            for(id in intArrayOf(R.id.wt_i,R.id.ww_i)) rv.setTextColor(id,th.gridIn.toArgb())
+            rv.setInt(R.id.w_bg,"setColorFilter",th.card.toArgb())
+            val ts=sp.getLong("wts",0L)
+            rv.setChronometer(R.id.w_age,SystemClock.elapsedRealtime()-(if(ts>0) System.currentTimeMillis()-ts else 0L),"%s ago",true)
+            rv.setOnClickPendingIntent(R.id.w_root,tap(c))
+            return rv
+          }
+
+          /** Animated flow widget: four pre-drawn frames flipped quickly, so the dashes appear to travel along the lines. */
+          fun flowViews(c:Context):RemoteViews{
+            val sp=c.getSharedPreferences("c",0); val th=widgetTheme(c)
+            val frames=renderFlow(th,sp.getString("wf","")!!.split("|"))
+            val rv=RemoteViews(c.packageName,R.layout.widget_flow)
+            intArrayOf(R.id.f0,R.id.f1,R.id.f2,R.id.f3).forEachIndexed{ i,id-> rv.setImageViewBitmap(id,frames[i]) }
+            rv.setInt(R.id.wf_bg,"setColorFilter",th.card.toArgb())
+            rv.setOnClickPendingIntent(R.id.wf_root,tap(c))
+            return rv
+          }
+
+          fun renderFlow(th:ThemeDef,f:List<String>):List<Bitmap>{
+            fun n(i:Int)=f.getOrNull(i)?.toDoubleOrNull()?:0.0
+            val soc=n(0).toInt(); val pv=n(1); val gin=n(2); val gout=n(3); val load=n(4); val chg=n(5); val dis=n(6)
+            val vg=n(7); val ve=n(8); val rt=f.getOrNull(9)?:"-"
+            val w=640; val h=320
+            fun kwS(x:Double)=if(x>=1000) "%.2f kW".format(x/1000) else "%.0f W".format(x)
+            return (0 until 4).map{ fr->
+              val bmp=Bitmap.createBitmap(w,h,Bitmap.Config.ARGB_8888); val cv=Canvas(bmp)
+              val p=Paint(Paint.ANTI_ALIAS_FLAG)
+              val cx=w/2f; val cy=172f; val r=62f
+              fun flow(x1:Float,y1:Float,x2:Float,y2:Float,on:Boolean,col:Int){
+                p.style=Paint.Style.STROKE; p.strokeWidth=6f; p.strokeCap=Paint.Cap.ROUND
+                p.color=if(on) col else th.line2.toArgb()
+                p.pathEffect=if(on) DashPathEffect(floatArrayOf(10f,14f),(24-fr*6).toFloat()) else null
+                cv.drawLine(x1,y1,x2,y2,p); p.pathEffect=null }
+              flow(cx,80f,cx,cy-r-12,pv>20,th.solar.toArgb())
+              if(gout>20) flow(cx-r-12,cy,182f,cy,true,th.grid.toArgb()) else flow(182f,cy,cx-r-12,cy,gin>20,th.gridIn.toArgb())
+              flow(cx+r+12,cy,w-182f,cy,load>20,th.home.toArgb())
+              p.style=Paint.Style.STROKE; p.strokeWidth=14f; p.color=th.track.toArgb(); cv.drawCircle(cx,cy,r,p)
+              p.color=th.battery.toArgb(); p.strokeCap=Paint.Cap.ROUND; cv.drawArc(cx-r,cy-r,cx+r,cy+r,-90f,3.6f*soc,false,p)
+              p.style=Paint.Style.FILL; p.textAlign=Paint.Align.CENTER
+              p.typeface=Typeface.DEFAULT_BOLD; p.color=th.text.toArgb(); p.textSize=42f; cv.drawText("$soc%",cx,cy+14f,p)
+              p.typeface=Typeface.DEFAULT; p.color=th.dim.toArgb(); p.textSize=19f
+              cv.drawText(if(chg>20) "charging" else if(dis>20) "discharging" else "idle",cx,cy+40f,p)
+              fun node(x:Float,y:Float,label:String,value:String,sub:String,col:Int){
+                p.typeface=Typeface.DEFAULT_BOLD; p.color=col; p.textSize=20f; cv.drawText(label,x,y,p)
+                p.typeface=Typeface.MONOSPACE; p.color=th.text.toArgb(); p.textSize=30f; cv.drawText(value,x,y+34f,p)
+                if(sub.isNotEmpty()){ p.typeface=Typeface.DEFAULT; p.color=th.dim.toArgb(); p.textSize=18f; cv.drawText(sub,x,y+58f,p) } }
+              node(cx,32f,"SOLAR",kwS(pv),"",th.solar.toArgb())
+              node(98f,cy-26f,if(gout>20||gin<=20) "EXPORT" else "IMPORT",kwS(if(gout>20||gin<=20) gout else gin),if(vg>0) "%.0f V".format(vg) else "",if(gout>20||gin<=20) th.grid.toArgb() else th.gridIn.toArgb())
+              node(w-98f,cy-26f,"HOME",kwS(load),if(ve>0) "%.0f V".format(ve) else "",th.home.toArgb())
+              p.typeface=Typeface.DEFAULT; p.color=th.dim.toArgb(); p.textSize=22f; cv.drawText("Runtime  "+rt,cx,h-14f,p)
+              bmp }
+          }
+
           fun pushWidget(c:Context,x:Lux,rt:String){
             Daily.init(c); val n=LocalDate.now(); val w=Daily.sum(n.minusDays(6),n).first
             val f={d:Double->"%.1f".format(d)}
-            c.getSharedPreferences("c",0).edit().putString("w","${x.soc}%|$rt|${kw(x.pv)}|${kw(x.load)}|${f(x.yld)}|${f(x.expDay)}|${f(x.impDay)}|${f(w[0])}|${f(w[3])}|${f(w[2])}").apply()
-            AppWidgetManager.getInstance(c).updateAppWidget(ComponentName(c,LuxWidget::class.java),views(c))
+            c.getSharedPreferences("c",0).edit()
+              .putString("w","${x.soc}%|$rt|${kw(x.pv)}|${kw(x.load)}|${f(x.yld)}|${f(x.expDay)}|${f(x.impDay)}|${f(w[0])}|${f(w[3])}|${f(w[2])}")
+              .putString("wf","${x.soc}|${x.pv}|${x.gridIn}|${x.gridOut}|${x.load}|${x.charge}|${x.discharge}|${x.vGrid}|${x.vEps}|$rt")
+              .putLong("wts",System.currentTimeMillis()).apply()
+            val m=AppWidgetManager.getInstance(c)
+            val a=ComponentName(c,LuxWidget::class.java); val b=ComponentName(c,LuxFlowWidget::class.java)
+            if(m.getAppWidgetIds(a).isNotEmpty()) m.updateAppWidget(a,views(c))
+            if(m.getAppWidgetIds(b).isNotEmpty()) m.updateAppWidget(b,flowViews(c))
           }
           EOF
           cat > app/src/main/res/drawable/ic_fg.xml <<'EOF'
@@ -1757,20 +2032,22 @@ jobs:
           <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle"><solid android:color="#0C131B"/><stroke android:width="1dp" android:color="#1B2836"/><corners android:radius="20dp"/></shape>
           EOF
           cat > app/src/main/res/layout/widget.xml <<'EOF'
-          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/w_root" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="horizontal" android:gravity="center_vertical" android:background="@drawable/widget_bg" android:paddingLeft="14dp" android:paddingRight="14dp" android:paddingTop="8dp" android:paddingBottom="8dp">
-          <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
-          <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="bottom">
-          <TextView android:id="@+id/w_soc" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="–" android:textColor="#34D399" android:textSize="26sp" android:textStyle="bold"/>
-          <TextView android:id="@+id/w_rt" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginLeft="8dp" android:layout_marginBottom="3dp" android:text="–" android:textColor="#E6EDF5" android:textSize="12sp"/>
-          </LinearLayout>
-          <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content" android:orientation="horizontal">
-          <TextView android:id="@+id/a" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Solar " android:textColor="#9AA8BA" android:textSize="11sp" /><TextView android:id="@+id/w_pv" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="–" android:textColor="#FBBF24" android:textSize="11sp" /><TextView android:id="@+id/b" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="  Load " android:textColor="#9AA8BA" android:textSize="11sp" /><TextView android:id="@+id/w_load" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="–" android:textColor="#A78BFA" android:textSize="11sp" />
-          </LinearLayout>
-          </LinearLayout>
-          <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1.2" android:layout_marginLeft="12dp" android:orientation="vertical">
-          <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal"><TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="kWh" android:textColor="#9AA8BA" android:textSize="9sp"/><TextView android:id="@+id/hgen" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="end" android:text="GEN" android:textColor="#FBBF24" android:textSize="9sp" /><TextView android:id="@+id/hexp" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="end" android:text="EXP" android:textColor="#22D3EE" android:textSize="9sp" /><TextView android:id="@+id/himp" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="end" android:text="IMP" android:textColor="#60A5FA" android:textSize="9sp" /></LinearLayout><LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal"><TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="TODAY" android:textColor="#9AA8BA" android:textSize="10sp"/><TextView android:id="@+id/w_tg" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="end" android:text="–" android:textColor="#FBBF24" android:textSize="13sp" android:textStyle="bold"/><TextView android:id="@+id/w_te" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="end" android:text="–" android:textColor="#22D3EE" android:textSize="13sp" android:textStyle="bold"/><TextView android:id="@+id/w_ti" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="end" android:text="–" android:textColor="#60A5FA" android:textSize="13sp" android:textStyle="bold"/></LinearLayout><LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal"><TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="WEEK" android:textColor="#9AA8BA" android:textSize="10sp"/><TextView android:id="@+id/w_wg" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="end" android:text="–" android:textColor="#FBBF24" android:textSize="13sp" android:textStyle="bold"/><TextView android:id="@+id/w_we" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="end" android:text="–" android:textColor="#22D3EE" android:textSize="13sp" android:textStyle="bold"/><TextView android:id="@+id/w_wi" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="end" android:text="–" android:textColor="#60A5FA" android:textSize="13sp" android:textStyle="bold"/></LinearLayout>
-          </LinearLayout>
-          </LinearLayout>
+          <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/w_root" android:layout_width="match_parent" android:layout_height="match_parent">
+          <ImageView android:id="@+id/w_bg" android:layout_width="match_parent" android:layout_height="match_parent" android:src="@drawable/widget_bg" android:scaleType="fitXY"/>
+          <ViewFlipper android:id="@+id/w_flip" android:layout_width="match_parent" android:layout_height="match_parent" android:padding="12dp" android:autoStart="true" android:flipInterval="6000" android:inAnimation="@android:anim/fade_in" android:outAnimation="@android:anim/fade_out">
+          <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="horizontal" android:gravity="center_vertical"><LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical"><LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="bottom"><TextView android:id="@+id/w_soc" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="–" android:textColor="#34D399" android:textSize="28sp" android:textStyle="bold"/><TextView android:id="@+id/w_rt" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="–" android:textColor="#E6EDF5" android:textSize="12sp" android:layout_marginLeft="8dp" android:layout_marginBottom="4dp"/></LinearLayout><LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content" android:orientation="horizontal"><TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Solar " android:textColor="#9AA8BA" android:textSize="11sp" /><TextView android:id="@+id/w_pv" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="–" android:textColor="#FBBF24" android:textSize="11sp" /><TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="   Load " android:textColor="#9AA8BA" android:textSize="11sp" /><TextView android:id="@+id/w_load" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="–" android:textColor="#A78BFA" android:textSize="11sp" /></LinearLayout></LinearLayout><LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content" android:orientation="vertical" android:gravity="end"><TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="UPDATED" android:textColor="#9AA8BA" android:textSize="8sp" /><Chronometer android:id="@+id/w_age" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textColor="#9AA8BA" android:textSize="11sp"/></LinearLayout></LinearLayout>
+          <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:gravity="center_vertical"><TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="TODAY" android:textColor="#9AA8BA" android:textSize="9sp" android:letterSpacing="0.15"/><LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal"><LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical"><TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="GENERATION" android:textColor="#9AA8BA" android:textSize="9sp" /><TextView android:id="@+id/wt_g" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="–" android:textColor="#E6EDF5" android:textSize="22sp" android:textStyle="bold"/><TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="kWh" android:textColor="#9AA8BA" android:textSize="10sp" /></LinearLayout><LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical"><TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="EXPORT" android:textColor="#9AA8BA" android:textSize="9sp" /><TextView android:id="@+id/wt_e" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="–" android:textColor="#E6EDF5" android:textSize="22sp" android:textStyle="bold"/><TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="kWh" android:textColor="#9AA8BA" android:textSize="10sp" /></LinearLayout><LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical"><TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="IMPORT" android:textColor="#9AA8BA" android:textSize="9sp" /><TextView android:id="@+id/wt_i" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="–" android:textColor="#E6EDF5" android:textSize="22sp" android:textStyle="bold"/><TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="kWh" android:textColor="#9AA8BA" android:textSize="10sp" /></LinearLayout></LinearLayout></LinearLayout>
+          <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:gravity="center_vertical"><TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="LAST 7 DAYS" android:textColor="#9AA8BA" android:textSize="9sp" android:letterSpacing="0.15"/><LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal"><LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical"><TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="GENERATION" android:textColor="#9AA8BA" android:textSize="9sp" /><TextView android:id="@+id/ww_g" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="–" android:textColor="#E6EDF5" android:textSize="22sp" android:textStyle="bold"/><TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="kWh" android:textColor="#9AA8BA" android:textSize="10sp" /></LinearLayout><LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical"><TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="EXPORT" android:textColor="#9AA8BA" android:textSize="9sp" /><TextView android:id="@+id/ww_e" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="–" android:textColor="#E6EDF5" android:textSize="22sp" android:textStyle="bold"/><TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="kWh" android:textColor="#9AA8BA" android:textSize="10sp" /></LinearLayout><LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical"><TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="IMPORT" android:textColor="#9AA8BA" android:textSize="9sp" /><TextView android:id="@+id/ww_i" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="–" android:textColor="#E6EDF5" android:textSize="22sp" android:textStyle="bold"/><TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="kWh" android:textColor="#9AA8BA" android:textSize="10sp" /></LinearLayout></LinearLayout></LinearLayout>
+          </ViewFlipper>
+          </FrameLayout>
+          EOF
+          cat > app/src/main/res/layout/widget_flow.xml <<'EOF'
+          <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/wf_root" android:layout_width="match_parent" android:layout_height="match_parent">
+          <ImageView android:id="@+id/wf_bg" android:layout_width="match_parent" android:layout_height="match_parent" android:src="@drawable/widget_bg" android:scaleType="fitXY"/>
+          <ViewFlipper android:id="@+id/wf_flip" android:layout_width="match_parent" android:layout_height="match_parent" android:padding="6dp" android:autoStart="true" android:flipInterval="250">
+          <ImageView android:id="@+id/f0" android:layout_width="match_parent" android:layout_height="match_parent" android:scaleType="fitCenter"/><ImageView android:id="@+id/f1" android:layout_width="match_parent" android:layout_height="match_parent" android:scaleType="fitCenter"/><ImageView android:id="@+id/f2" android:layout_width="match_parent" android:layout_height="match_parent" android:scaleType="fitCenter"/><ImageView android:id="@+id/f3" android:layout_width="match_parent" android:layout_height="match_parent" android:scaleType="fitCenter"/>
+          </ViewFlipper>
+          </FrameLayout>
           EOF
           cat > app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml <<'EOF'
           <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android"><background android:drawable="@color/ic_bg"/><foreground android:drawable="@drawable/ic_fg"/></adaptive-icon>
@@ -1780,6 +2057,9 @@ jobs:
           EOF
           cat > app/src/main/res/values/colors.xml <<'EOF'
           <resources><color name="ic_bg">#0F1419</color></resources>
+          EOF
+          cat > app/src/main/res/xml/widget_flow_info.xml <<'EOF'
+          <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android" android:minWidth="250dp" android:minHeight="140dp" android:updatePeriodMillis="0" android:initialLayout="@layout/widget_flow" android:resizeMode="horizontal|vertical" android:widgetCategory="home_screen"/>
           EOF
           cat > app/src/main/res/xml/widget_info.xml <<'EOF'
           <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android" android:minWidth="250dp" android:minHeight="70dp" android:updatePeriodMillis="0" android:initialLayout="@layout/widget" android:resizeMode="horizontal|vertical" android:widgetCategory="home_screen"/>
