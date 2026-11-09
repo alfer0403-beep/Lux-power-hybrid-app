@@ -66,6 +66,258 @@ jobs:
           <receiver android:name=".BootReceiver" android:exported="true"><intent-filter><action android:name="android.intent.action.BOOT_COMPLETED"/></intent-filter></receiver>
           </application></manifest>
           EOF
+          cat > app/src/main/java/com/lux/monitor/Appliances.kt <<'EOF'
+          package com.lux.monitor
+          import android.content.Context
+          import android.content.SharedPreferences
+          import androidx.compose.foundation.background
+          import androidx.compose.foundation.clickable
+          import androidx.compose.foundation.horizontalScroll
+          import androidx.compose.foundation.layout.*
+          import androidx.compose.foundation.rememberScrollState
+          import androidx.compose.foundation.shape.RoundedCornerShape
+          import androidx.compose.material3.*
+          import androidx.compose.runtime.*
+          import androidx.compose.ui.Alignment
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.draw.clip
+          import androidx.compose.ui.graphics.Color
+          import androidx.compose.ui.platform.LocalContext
+          import androidx.compose.ui.text.font.FontFamily
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.unit.dp
+          import androidx.compose.ui.unit.sp
+          import org.json.JSONArray
+          import org.json.JSONObject
+          import java.io.File
+          import java.time.Instant
+          import java.time.LocalDate
+          import java.time.ZoneId
+
+          /** Switch-on events found from jumps in the load. A big jump that later drops by the same amount is one event,
+           *  and loads that start or stop together are split by matching combinations. */
+          fun edgeEvents(thr:Double,maxMin:Int):List<Ev>{
+            val pts=History.pts.toList().sortedBy{it.t}
+            if(pts.size<120) return emptyList()
+            val n=pts.size; val l=pts.map{ it.load.toDouble() }
+            class Edge(val t:Long,var d:Double)
+            val edges=ArrayList<Edge>(); var i=1
+            while(i<n){
+              if(pts[i].t-pts[i-1].t>3*60000L){ i++; continue }
+              val d=l[i]-l[i-1]
+              if(Math.abs(d)>=thr*0.5){
+                var s=d; var j=i
+                while(j+1<n&&j-i<2&&(l[j+1]-l[j])*d>0&&Math.abs(l[j+1]-l[j])>=thr*0.25&&pts[j+1].t-pts[j].t<=3*60000L){ j++; s+=l[j]-l[j-1] }
+                if(Math.abs(s)>=thr) edges.add(Edge(pts[i].t,s))
+                i=j+1
+              } else i++
+            }
+            val maxMs=maxMin*60000L
+            val open=ArrayList<Edge>(); val out=ArrayList<Ev>()
+            fun close(o:Edge,t:Long,m:Double){ val mins=((t-o.t)/60000).toInt(); if(mins>=2) out.add(Ev(o.t,m,mins,m*mins/60.0/1000.0)) }
+            for(e in edges){
+              open.removeAll{ e.t-it.t>maxMs }
+              if(e.d>0){ open.add(Edge(e.t,e.d)); continue }
+              val m=-e.d
+              val one=open.filter{ Math.abs(it.d-m)<=maxOf(0.25*it.d,150.0) }.minByOrNull{ Math.abs(it.d-m) }
+              if(one!=null){ open.remove(one); close(one,e.t,one.d); continue }
+              val recent=open.takeLast(8); var best:List<Edge>?=null; var be=1e18
+              for(a in recent.indices) for(b in a+1 until recent.size){
+                val e2=Math.abs(recent[a].d+recent[b].d-m)
+                if(e2<=maxOf(0.12*m,150.0)&&e2<be){ be=e2; best=listOf(recent[a],recent[b]) }
+                for(c in b+1 until recent.size){
+                  val e3=Math.abs(recent[a].d+recent[b].d+recent[c].d-m)
+                  if(e3<=maxOf(0.12*m,150.0)&&e3<be){ be=e3; best=listOf(recent[a],recent[b],recent[c]) } } }
+              val bb=best
+              if(bb!=null){ bb.forEach{ open.remove(it); close(it,e.t,it.d) }; continue }
+              val big=open.filter{ it.d>=m*0.95 }.minByOrNull{ it.d-m }
+              if(big!=null){ close(big,e.t,m); big.d-=m; if(big.d<thr*0.5) open.remove(big) }
+            }
+            return out
+          }
+
+          class LoggedEv(val t:Long,val w:Double,val min:Int,val kwh:Double)
+
+          /** Events kept for a year so patterns and monthly totals survive the 7-day history window. */
+          object EventLog{
+            private var file:File?=null
+            val ev=ArrayList<LoggedEv>()
+            @Synchronized fun init(ctx:Context){
+              if(file!=null) return
+              val f=File(ctx.filesDir,"events2.csv"); file=f
+              if(f.exists()) f.forEachLine{ l-> val p=l.split(","); if(p.size==4) ev.add(LoggedEv(p[0].toLong(),p[1].toDouble(),p[2].toInt(),p[3].toDouble())) }
+            }
+            @Synchronized fun scan(ctx:Context){
+              init(ctx)
+              val thr=maxOf(150.0,ctx.getSharedPreferences("c",0).getString("spikeW","400")!!.toDoubleOrNull()?:400.0)
+              var changed=false
+              for(e in edgeEvents(thr,840)){
+                if(ev.any{ Math.abs(it.t-e.t)<=2*60000L&&Math.abs(it.w-e.watts)<=0.2*it.w }) continue
+                ev.add(LoggedEv(e.t,e.watts,e.minutes,e.kwh)); changed=true }
+              val cut=System.currentTimeMillis()-400*86400000L
+              if(ev.removeAll{ it.t<cut }) changed=true
+              if(changed) file!!.writeText(ev.joinToString(""){ "${it.t},${it.w},${it.min},${it.kwh}\n" })
+            }
+          }
+
+          /** A switch-on that happens at about the same time of day, with about the same size, on several different days. */
+          class Cluster{
+            var sn=0.0; var cs=0.0; var wSum=0.0; var n=0; val dates=HashSet<LocalDate>(); var minSum=0.0; var kwhSum=0.0
+            val timeMin:Int get(){ var a=Math.atan2(sn,cs); if(a<0) a+=2*Math.PI; return ((a/(2*Math.PI)*1440).toInt())%1440 }
+            val watts:Double get()=wSum/n
+          }
+          fun spikeClusters():List<Cluster>{
+            val z=ZoneId.systemDefault(); val cut=System.currentTimeMillis()-30*86400000L
+            val cl=ArrayList<Cluster>()
+            for(e in EventLog.ev.filter{ it.t>=cut }.sortedBy{ it.t }){
+              val ldt=Instant.ofEpochMilli(e.t).atZone(z).toLocalDateTime(); val tm=ldt.hour*60+ldt.minute; val ang=tm/1440.0*2*Math.PI
+              var best=cl.firstOrNull{ k-> var dt=Math.abs(k.timeMin-tm); dt=minOf(dt,1440-dt); dt<=25&&Math.abs(k.watts-e.w)<=maxOf(150.0,0.12*k.watts) }
+              if(best==null){ best=Cluster(); cl.add(best) }
+              best.sn+=Math.sin(ang); best.cs+=Math.cos(ang); best.wSum+=e.w; best.n++; best.dates.add(ldt.toLocalDate()); best.minSum+=e.min; best.kwhSum+=e.kwh
+            }
+            return cl.filter{ it.n>=3&&it.dates.size>=3 }.sortedBy{ it.timeMin }
+          }
+
+          class Assign(val t:Int,val w:Double,val name:String)
+          /** Names you give to repeated spikes (matched by time of day and size, so they survive small drifts). */
+          object Spk{
+            fun load(sp:SharedPreferences):List<Assign>{
+              val a=runCatching{ JSONArray(sp.getString("spkAssign","[]")) }.getOrNull()?:return emptyList()
+              return (0 until a.length()).map{ val o=a.getJSONObject(it); Assign(o.getInt("t"),o.getDouble("w"),o.getString("n")) }
+            }
+            private fun save(sp:SharedPreferences,l:List<Assign>){
+              val a=JSONArray(); l.forEach{ a.put(JSONObject().put("t",it.t).put("w",it.w).put("n",it.name)) }
+              sp.edit().putString("spkAssign",a.toString()).apply()
+            }
+            private fun dist(a:Assign,c:Cluster):Double{ var dt=Math.abs(a.t-c.timeMin); dt=minOf(dt,1440-dt); return dt+Math.abs(a.w-c.watts)/50.0 }
+            private fun near(a:Assign,c:Cluster):Boolean{ var dt=Math.abs(a.t-c.timeMin); dt=minOf(dt,1440-dt); return dt<=45&&Math.abs(a.w-c.watts)<=maxOf(200.0,0.2*a.w) }
+            fun nameFor(sp:SharedPreferences,c:Cluster):String?=load(sp).filter{ near(it,c) }.minByOrNull{ dist(it,c) }?.name
+            fun assign(sp:SharedPreferences,c:Cluster,name:String){
+              val l=load(sp).filterNot{ near(it,c) }.toMutableList()
+              if(name.isNotBlank()) l.add(Assign(c.timeMin,c.watts,name.trim()))
+              save(sp,l)
+            }
+          }
+
+          class Item(val name:String,val w:Double,val manualH:Double)
+          /** Items you add by hand (for loads too small or too steady to show up as spikes, like Christmas lights). */
+          object Appl{
+            fun load(sp:SharedPreferences):List<Item>{
+              val a=runCatching{ JSONArray(sp.getString("appl","[]")) }.getOrNull()?:return emptyList()
+              return (0 until a.length()).map{ val o=a.getJSONObject(it); Item(o.getString("n"),o.getDouble("w"),o.optDouble("m",0.0)) }.filter{ it.manualH>0 }
+            }
+            fun save(sp:SharedPreferences,l:List<Item>){
+              val a=JSONArray(); l.forEach{ a.put(JSONObject().put("n",it.name).put("w",it.w).put("m",it.manualH)) }
+              sp.edit().putString("appl",a.toString()).apply()
+            }
+          }
+
+          fun fmtClock(min:Int):String=java.time.LocalTime.of(min/60,min%60).format(java.time.format.DateTimeFormatter.ofPattern("h:mm a"))
+
+          /** Approximate kWh per name over 30 days, scaled up when fewer days have been recorded. */
+          fun monthlyBreakdown(sp:SharedPreferences):Triple<List<Pair<String,Double>>,Double?,Int>{
+            val now=System.currentTimeMillis(); val from=now-30*86400000L
+            val first=Daily.days.keys.minOrNull()?.let{ LocalDate.parse(it) }
+            val cov=maxOf(1,minOf(30,if(first==null) 1 else (java.time.temporal.ChronoUnit.DAYS.between(first,LocalDate.now())+1).toInt()))
+            val scale=30.0/cov
+            val byName=HashMap<String,Double>(); var clustered=0.0
+            for(c in spikeClusters()){ val nm=Spk.nameFor(sp,c)?:"Not named yet"; byName[nm]=(byName[nm]?:0.0)+c.kwhSum*scale; clustered+=c.kwhSum*scale }
+            val out=ArrayList<Pair<String,Double>>()
+            byName.forEach{ (k,v)-> if(v>0.01) out.add(Pair(k,v)) }
+            val other=EventLog.ev.filter{ it.t>=from }.sumOf{it.kwh}*scale-clustered
+            if(other>0.05) out.add(Pair("Other spikes (not repeating)",other))
+            Appl.load(sp).forEach{ out.add(Pair(it.name+" (by hand)",it.w*it.manualH*30/1000.0)) }
+            baselineW()?.let{ out.add(Pair("Always-on baseline",it*24*30/1000.0)) }
+            val today=LocalDate.now().toString()
+            val cons=Daily.days.entries.filter{ it.key<today&&it.value[1]>0 }.sortedByDescending{it.key}.take(cov).map{it.value[1]}
+            val total=if(cons.size>=3) cons.sum()*30.0/cons.size else null
+            return Triple(out.sortedByDescending{it.second},total,cov)
+          }
+
+          @Composable fun BarRow(name:String,v:Double,max:Double,col:Color,sub:String){
+            Column(Modifier.padding(vertical=4.dp)){
+              Row(Modifier.fillMaxWidth(),Arrangement.SpaceBetween){
+                Text(name,fontSize=12.sp,color=WHITE,modifier=Modifier.weight(1f))
+                Text(fm(v,1)+" kWh",fontSize=12.sp,fontFamily=FontFamily.Monospace,color=col) }
+              Box(Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)).background(TRACK)){
+                Box(Modifier.fillMaxWidth((v/max).toFloat().coerceIn(0.02f,1f)).fillMaxHeight().background(col)) }
+              if(sub.isNotEmpty()) Text(sub,fontSize=10.sp,color=DIM) }
+          }
+
+          val EQUIP=listOf("A/C","Coffee machine","Espresso machine","Water heater","Dryer","Washer","Oven","Microwave","Dishwasher","EV charger","Pool pump","Dehumidifier")
+          val ROOMS=listOf("Main bedroom","Bedroom 1","Bedroom 2","Living room","Kitchen","Garage","Laundry","Outdoor")
+
+          @Composable fun ColumnScope.AppliancesCard(sp:SharedPreferences){
+            val ctx=LocalContext.current
+            val ri=sp.getString("ri","0.25")!!.toDoubleOrNull()?:0.0; val cur=sp.getString("cu","$")!!
+            var rev by remember{ mutableStateOf(0) }
+            var show by remember{ mutableStateOf(false) }
+            var editing by remember{ mutableStateOf<Cluster?>(null) }
+            var equip by remember{ mutableStateOf("") }; var room by remember{ mutableStateOf("") }
+            var nm by remember{ mutableStateOf("") }; var wt by remember{ mutableStateOf("") }; var hr by remember{ mutableStateOf("") }
+            val clusters=remember(rev){ spikeClusters() }
+            val manual=remember(rev){ Appl.load(sp) }
+            val named=clusters.count{ Spk.nameFor(sp,it)!=null }
+            val days=maxOf(1,minOf(30,Daily.days.keys.minOrNull()?.let{ (java.time.temporal.ChronoUnit.DAYS.between(LocalDate.parse(it),LocalDate.now())+1).toInt() }?:1))
+            Section("REPEATED LOAD SPIKES",I_HOME,AMBER,summary="$named of ${clusters.size} named"){
+              LaunchedEffect(Unit){ withContextIO{ EventLog.scan(ctx) }; rev++ }
+              Text("Loads that switch on at about the same time of day, with about the same size, on several days. Tap one to say what it is.",fontSize=12.sp,color=DIM)
+              PrefField(sp,"spikeW","Smallest jump to list (watts)","400")
+              if(clusters.isEmpty()) Text("Nothing repeating yet. The list fills in after a few days, once the same jump has happened on at least 3 days. Keep the app running in the background.",fontSize=12.sp,color=AMBER)
+              clusters.forEach{ c->
+                val name=Spk.nameFor(sp,c)
+                Column(Modifier.fillMaxWidth().padding(vertical=3.dp).clip(RoundedCornerShape(12.dp)).background(TILE)
+                  .clickable{ editing=c; val p=(name?:"").split(" - "); equip=p.getOrElse(0){""}; room=p.getOrElse(1){""} }.padding(10.dp)){
+                  Row(Modifier.fillMaxWidth(),Arrangement.SpaceBetween,Alignment.CenterVertically){
+                    Text(fmtClock(c.timeMin),fontSize=14.sp,fontFamily=FontFamily.Monospace,fontWeight=FontWeight.Bold,color=WHITE)
+                    Text("+"+fm(c.watts)+" W",fontSize=14.sp,fontFamily=FontFamily.Monospace,fontWeight=FontWeight.Bold,color=AMBER) }
+                  Text(name?:"Tap to name this load",fontSize=13.sp,fontWeight=FontWeight.SemiBold,color=if(name==null) AMBER else GREEN)
+                  Text("seen on ${c.dates.size} of the last $days days, about ${fm(c.minSum/c.n)} min each, ${fm(c.kwhSum/c.n,2)} kWh per run",fontSize=11.sp,color=DIM) } }
+              val ed=editing
+              if(ed!=null){
+                val existing=Spk.load(sp).map{it.name}.distinct()
+                AlertDialog(onDismissRequest={ editing=null },
+                  title={ Text("+${fm(ed.watts)} W at ${fmtClock(ed.timeMin)}") },
+                  text={ Column(verticalArrangement=Arrangement.spacedBy(8.dp),modifier=Modifier.horizontalScroll(rememberScrollState())){
+                    if(existing.isNotEmpty()){
+                      Text("Same as one you named before",fontSize=11.sp)
+                      Row(horizontalArrangement=Arrangement.spacedBy(6.dp)){ existing.forEach{ n-> OutlinedButton({ val p=n.split(" - "); equip=p.getOrElse(0){""}; room=p.getOrElse(1){""} },contentPadding=PaddingValues(10.dp,2.dp)){ Text(n,fontSize=12.sp) } } } }
+                    Text("Equipment",fontSize=11.sp)
+                    Row(horizontalArrangement=Arrangement.spacedBy(6.dp)){ EQUIP.forEach{ e-> OutlinedButton({ equip=e },contentPadding=PaddingValues(10.dp,2.dp)){ Text(e,fontSize=12.sp) } } }
+                    OutlinedTextField(equip,{ equip=it },label={ Text("Equipment") },singleLine=true)
+                    Text("Room or place",fontSize=11.sp)
+                    Row(horizontalArrangement=Arrangement.spacedBy(6.dp)){ ROOMS.forEach{ r-> OutlinedButton({ room=r },contentPadding=PaddingValues(10.dp,2.dp)){ Text(r,fontSize=12.sp) } } }
+                    OutlinedTextField(room,{ room=it },label={ Text("Room (optional)") },singleLine=true) } },
+                  confirmButton={ TextButton({ Spk.assign(sp,ed,if(equip.isBlank()) "" else equip.trim()+(if(room.isBlank()) "" else " - "+room.trim())); editing=null; rev++ }){ Text("Save") } },
+                  dismissButton={ Row{
+                    TextButton({ Spk.assign(sp,ed,""); editing=null; rev++ }){ Text("Clear name") }
+                    TextButton({ editing=null }){ Text("Cancel") } } })
+              }
+              Button({ show=!show },Modifier.fillMaxWidth().padding(top=6.dp)){ Text(if(show) "Hide monthly breakdown" else "Show monthly breakdown") }
+              if(show){
+                val r=monthlyBreakdown(sp); val rows=r.first
+                if(rows.isEmpty()) Text("Not enough data yet. Name a few spikes and keep the app running.",fontSize=12.sp,color=AMBER)
+                else{
+                  val cols=listOf(AMBER,CYAN,VIOLET,GREEN,BLUE,PINK); val mx=rows.maxOf{it.second}
+                  rows.forEachIndexed{ k,(n,v)-> BarRow(n,v,mx,cols[k%cols.size],"about $cur${fm(v*ri,2)} a month") }
+                  val sum=rows.sumOf{it.second}
+                  Text(if(r.second!=null) "Together these account for about ${fm(sum/r.second!!*100)}% of your roughly ${fm(r.second!!)} kWh a month." else "A monthly total needs a few recorded days.",fontSize=11.sp,color=DIM,modifier=Modifier.padding(top=6.dp))
+                  Text("Estimates from ${r.third} recorded day${if(r.third==1) "" else "s"}, scaled to 30 days. Loads that start in the same minute can merge, so treat this as a guide.",fontSize=11.sp,color=DIM) } }
+              Text("Add by hand (for small or steady loads like Christmas lights)",fontSize=12.sp,fontWeight=FontWeight.Bold,color=WHITE,modifier=Modifier.padding(top=10.dp))
+              manual.forEachIndexed{ idx,i->
+                Row(Modifier.fillMaxWidth(),Arrangement.SpaceBetween,Alignment.CenterVertically){
+                  Text("${i.name}: ${fm(i.w)} W for ${fm(i.manualH,1)} h a day",fontSize=12.sp,color=WHITE,modifier=Modifier.weight(1f))
+                  TextButton({ Appl.save(sp,Appl.load(sp).filterIndexed{ k,_->k!=idx }); rev++ }){ Text("Remove",fontSize=12.sp) } } }
+              OutlinedTextField(nm,{ nm=it },label={ Text("Item name") },singleLine=true,modifier=Modifier.fillMaxWidth())
+              Row(Modifier.fillMaxWidth(),Arrangement.spacedBy(8.dp)){
+                OutlinedTextField(wt,{ wt=it },label={ Text("Watts") },singleLine=true,modifier=Modifier.weight(1f))
+                OutlinedTextField(hr,{ hr=it },label={ Text("Hours a day") },singleLine=true,modifier=Modifier.weight(1f)) }
+              OutlinedButton({ val w=wt.toDoubleOrNull(); val h=hr.toDoubleOrNull()
+                if(nm.isNotBlank()&&w!=null&&h!=null&&w>0&&h>0){ Appl.save(sp,Appl.load(sp)+Item(nm.trim(),w,h)); nm=""; wt=""; hr=""; rev++ } },Modifier.fillMaxWidth()){ Text("Add item") }
+            }
+          }
+          suspend fun <T> withContextIO(block:suspend ()->T):T=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO){ block() }
+          EOF
           cat > app/src/main/java/com/lux/monitor/Backup.kt <<'EOF'
           package com.lux.monitor
           import android.content.ContentValues
@@ -321,6 +573,7 @@ jobs:
             }
 
             LoadInsightsCard(sp)
+            AppliancesCard(sp)
             OffGridCard(sp)
 
             var confirm by remember{mutableStateOf(false)}
@@ -644,7 +897,7 @@ jobs:
           class Sig(val bucket:Int,val n:Int,val kwh:Double,val avgMin:Double)
 
           /** Finds appliance-style load steps (rise of 700 W or more that later drops back) in the last 7 days of 1-minute history. */
-          fun loadEvents():List<Ev>{
+          fun loadEvents(thr:Double=700.0,maxMin:Int=360):List<Ev>{
             val pts=History.pts.toList().sortedBy{it.t}
             if(pts.size<300) return emptyList()
             val l=pts.map{ it.load.toDouble() }
@@ -653,9 +906,9 @@ jobs:
             while(i<pts.size-8){
               if(pts[i+6].t-pts[i-6].t>14*60000L){ i++; continue }
               val pre=med(i-6,i-1); val d=med(i+1,i+6)-pre
-              if(d>=700){
+              if(d>=thr){
                 var j=i+6; var end=-1
-                while(j<pts.size-5&&j<i+360){
+                while(j<pts.size-5&&j<i+maxMin){
                   if(pts[j].t-pts[j-1].t>5*60000L) break
                   if(med(j,j+5)<pre+0.3*d){ end=j; break }
                   j++ }
@@ -690,7 +943,6 @@ jobs:
           @Composable fun ColumnScope.LoadInsightsCard(sp:SharedPreferences){
             val ri=sp.getString("ri","0.25")!!.toDoubleOrNull()?:0.0; val cur=sp.getString("cu","$")!!
             val key=History.pts.size/60
-            val sigs=remember(key){ signatures(loadEvents()) }
             val base=remember(key){ baselineW() }
             val peak=History.pts.toList().maxByOrNull{it.load}
             val ld=LocalDate.now()
@@ -704,18 +956,6 @@ jobs:
               if(peak!=null) Bullet("Highest load recorded: ${fm(peak.load/1000.0,1)} kW on "+Instant.ofEpochMilli(peak.t).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("EEE HH:mm"))+".")
               if(yest!=null&&prior.size>=3){ val a=prior.average()
                 Bullet("Yesterday you used ${fm(yest,1)} kWh, ${if(yest>=a) fm((yest/a-1)*100)+"% above" else fm((1-yest/a)*100)+"% below"} your previous week's average of ${fm(a,1)} kWh.") }
-              if(sigs.isNotEmpty()){
-                Text("Biggest repeating loads (last 7 days)",fontSize=12.sp,fontWeight=FontWeight.Bold,color=WHITE,modifier=Modifier.padding(top=8.dp))
-                sigs.take(4).forEach{ s->
-                  val nm=sp.getString("sig${s.bucket}","")!!.ifBlank{ guessLoad(s.bucket,s.n,s.avgMin) }
-                  Column(Modifier.padding(vertical=4.dp)){
-                    Row(Modifier.fillMaxWidth(),Arrangement.SpaceBetween){
-                      Text(nm,fontSize=13.sp,fontWeight=FontWeight.Bold,color=WHITE,modifier=Modifier.weight(1f))
-                      Text(fm(s.bucket/1000.0,1)+" kW",fontSize=12.sp,fontFamily=FontFamily.Monospace,color=AMBER) }
-                    Text("${s.n} runs, about ${fm(s.avgMin)} min each, ${fm(s.kwh,1)} kWh ($cur${fm(s.kwh*ri,2)}) in 7 days",fontSize=11.sp,color=DIM) } }
-                Text("The names are guesses from power size and run time. Type your own to remember them:",fontSize=11.sp,color=DIM,modifier=Modifier.padding(top=6.dp))
-                sigs.take(3).forEach{ PrefField(sp,"sig${it.bucket}","Name the "+fm(it.bucket/1000.0,1)+" kW load","") }
-              } else if(History.pts.size>=300) Text("No repeating appliance-sized loads found yet.",fontSize=12.sp,color=DIM)
             }
           }
 
@@ -1626,7 +1866,7 @@ jobs:
               job=scope.launch{
                 val hist=ArrayDeque<Int>(); val win=maxOf(3,300/interval); val maxS=3600/interval
                 var bad=0; var good=0; var fail=0; var out=false; var lowSent=false; var lastUpd=0L
-                var lastFault=0L; var lastWarn=0L; var hotSent=false; var imbSent=false; var lastFc=0L; var lastOk=0L; var localRetryAt=0L; var localFails=0; var lastLux=0L; var offlineSince=0L; var offlineSent=false
+                var lastFault=0L; var lastWarn=0L; var hotSent=false; var imbSent=false; var lastFc=0L; var lastOk=0L; var localRetryAt=0L; var localFails=0; var lastLux=0L; var offlineSince=0L; var offlineSent=false; var lastScan=0L
                 while(isActive){
                   var cloudTried=false
                   try{
@@ -1652,6 +1892,7 @@ jobs:
                     Store.runtime=if(x.charge>x.discharge+50) "Full in "+hm(cap*1000*(100-x.soc)/100/x.charge) else hm(hours)
                     History.add(ctx,x)
                     Daily.put(ctx,x); pushWidget(ctx,x,Store.runtime)
+                    if(tNow-lastScan>=1800000L){ lastScan=tNow; runCatching{ EventLog.scan(ctx) } }
                     if(extra){
                       fun bit(v:Long)=63-java.lang.Long.numberOfLeadingZeros(v)
                       if(x.fault!=0L){ if(x.fault!=lastFault) alert(ctx,8,"Inverter fault","Code 0x${java.lang.Long.toHexString(x.fault)} (bit ${bit(x.fault)}).") } else if(lastFault!=0L) notifier(ctx).cancel(8)
