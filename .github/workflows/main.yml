@@ -4495,8 +4495,9 @@ jobs:
           object SceneCfg{ var on by mutableStateOf(true) }
 
           /** Projection of the rendered house (isometric), in 360x330 design units. */
-          private const val AX_=(7.6978)f
-          private const val BX_=(-7.6978)f
+          private const val AX_=7.6978f
+          private const val BX_=-7.6978f
+          private const val CX_=0f
           private const val DX_=164.6044f
           private const val EY_=4.4444f
           private const val FY_=4.4444f
