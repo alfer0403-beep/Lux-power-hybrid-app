@@ -6194,6 +6194,7 @@ jobs:
               drawRoundRect(color=Color(0xB3060A12),topLeft=P(8f,236f),size=Size(344f*k,64f*k),cornerRadius=CornerRadius(14f*k))
               label(tm,if(x.gridOut>20) "TO GRID" else "FROM GRID",18f*k,246f*k,9f*k,if(x.gridOut>20) CYAN else BLUE)
               label(tm,kw(if(x.gridOut>20) x.gridOut else x.gridIn),18f*k,262f*k,14f*k,WHITE,mono=true,bold=true)
+              label(tm,"${x.vGrid.toInt()} V  \u00B7  ${"%.1f".format(x.fGrid)} Hz",18f*k,279f*k,9f*k,DIM,mono=true)
               label(tm,if(x.charge>20) "CHARGING" else if(x.discharge>20) "DISCHARGING" else "BATTERY",150f*k,246f*k,9f*k,GREEN,center=true)
               label(tm,"${x.soc}%",150f*k,262f*k,14f*k,WHITE,mono=true,bold=true,center=true)
               label(tm,"HOME",300f*k,246f*k,9f*k,VIOLET,center=true)
