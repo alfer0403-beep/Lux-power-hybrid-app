@@ -6006,7 +6006,6 @@ jobs:
           import android.content.SharedPreferences
           import android.graphics.BitmapFactory
           import android.graphics.PathMeasure
-          import androidx.compose.animation.core.LinearEasing
           import androidx.compose.foundation.Canvas
           import androidx.compose.foundation.layout.aspectRatio
           import androidx.compose.foundation.layout.fillMaxWidth
@@ -6033,6 +6032,16 @@ jobs:
           /** true = sky scene, false = classic ring. Set from Settings > Appearance. */
           object SceneCfg{ var on by mutableStateOf(true) }
 
+          /** Rolling in-memory trail of solar and load watts for the sparkline (about 120 samples, one per change in readings). */
+          object Trail{
+            val pv=mutableStateListOf<Float>()
+            val load=mutableStateListOf<Float>()
+            fun push(p:Float,l:Float){
+              pv.add(p); load.add(l)
+              while(pv.size>120){ pv.removeAt(0); load.removeAt(0) }
+            }
+          }
+
           @Composable fun HeroOrScene(x:Lux,rt:String){
             if(SceneCfg.on) SkyScene(x,rt) else Hero(x,rt)
           }
@@ -6055,12 +6064,19 @@ jobs:
             }
           }
 
-          /** Soft cloud made of overlapping rounded blobs, in 360x330 design units. */
+          /** Soft cloud made of overlapping blobs, in 360x330 design units. */
           private fun DrawScope.drawCloud(cx:Float,cy:Float,s:Float,k:Float,col:Color,a:Float){
             drawRoundRect(color=col,topLeft=Offset((cx-38f*s)*k,(cy-6f*s)*k),size=Size(76f*s*k,22f*s*k),cornerRadius=CornerRadius(11f*s*k),alpha=a)
             drawCircle(color=col,radius=15f*s*k,center=Offset((cx-14f*s)*k,(cy-6f*s)*k),alpha=a)
             drawCircle(color=col,radius=20f*s*k,center=Offset((cx+6f*s)*k,(cy-10f*s)*k),alpha=a)
             drawCircle(color=col,radius=13f*s*k,center=Offset((cx+26f*s)*k,(cy-4f*s)*k),alpha=a)
+          }
+
+          /** Frosted glass panel with a gradient edge in the accent colour. */
+          private fun DrawScope.glass(tl:Offset,sz:Size,r:Float,accent:Color,k:Float){
+            drawRoundRect(brush=Brush.verticalGradient(listOf(Color(0x40FFFFFF),Color(0xB3060A12))),topLeft=tl,size=sz,cornerRadius=CornerRadius(r))
+            drawRoundRect(brush=Brush.linearGradient(listOf(accent,Color(0x33FFFFFF),accent.copy(alpha=0.2f)),start=tl,end=tl+Offset(sz.width,sz.height)),
+              topLeft=tl,size=sz,cornerRadius=CornerRadius(r),style=Stroke(1.2f*k))
           }
 
           /** Quadratic curve from a to b, bowed by [bow] pixels (negative = upward). */
@@ -6069,11 +6085,16 @@ jobs:
             quadraticBezierTo((a.x+b.x)/2f,(a.y+b.y)/2f+bow,b.x,b.y)
           }
 
-          /** Base track, glow, then particles that travel along the curve. Speed scales with watts. */
+          /** Track, glow and particles along the curve. Thickness, glow and particle size grow with watts (full scale 3 kW). */
           private fun DrawScope.flowLine(p:Path,col:Color,on:Boolean,watts:Double,t:Float,k:Float){
-            drawPath(p,col.copy(alpha=if(on)0.18f else 0.08f),style=Stroke(width=if(on)10f*k else 3f*k,cap=StrokeCap.Round))
-            drawPath(p,col.copy(alpha=if(on)0.85f else 0.25f),style=Stroke(width=if(on)2.2f*k else 1.4f*k,cap=StrokeCap.Round))
-            if(!on) return
+            if(!on){
+              drawPath(p,col.copy(alpha=0.08f),style=Stroke(3f*k,cap=StrokeCap.Round))
+              drawPath(p,col.copy(alpha=0.25f),style=Stroke(1.4f*k,cap=StrokeCap.Round))
+              return
+            }
+            val s=(watts/3000.0).toFloat().coerceIn(0f,1f)
+            drawPath(p,col.copy(alpha=0.12f+0.25f*s),style=Stroke((8f+10f*s)*k,cap=StrokeCap.Round))
+            drawPath(p,col.copy(alpha=0.85f),style=Stroke((1.8f+2.6f*s)*k,cap=StrokeCap.Round))
             val pm=PathMeasure(p.asAndroidPath(),false)
             val len=pm.length
             if(len<=0f) return
@@ -6083,12 +6104,12 @@ jobs:
             for(i in 0 until n){
               val f=((t*speed)+i.toFloat()/n)%1f
               pm.getPosTan(f*len,pos,null)
-              drawCircle(col,radius=8f*k,center=Offset(pos[0],pos[1]),alpha=0.25f)
-              drawCircle(col,radius=3.2f*k,center=Offset(pos[0],pos[1]))
+              drawCircle(col,radius=(5f+4f*s)*k,center=Offset(pos[0],pos[1]),alpha=0.25f)
+              drawCircle(col,radius=(2.4f+1.4f*s)*k,center=Offset(pos[0],pos[1]))
             }
           }
 
-          /** Sky scene: the real photo of the house, drifting clouds, curved animated power flows, live readouts. */
+          /** Sky scene: real photo, sunset wash, lamp glow, drifting clouds, curved flows, glass readouts, grid health, sparkline. */
           @Composable fun SkyScene(x:Lux,rt:String){
             val ctx=LocalContext.current
             val sp=ctx.getSharedPreferences("c",0)
@@ -6099,35 +6120,48 @@ jobs:
               var last=0L
               while(true){ withFrameNanos{ n -> if(last!=0L) tSec+=(n-last)/1e9f; last=n } }
             }
+            LaunchedEffect(x){ Trail.push(x.pv.toFloat(),x.load.toFloat()) }
+
             val now=LocalTime.now(); val m=now.hour*60+now.minute
             val (rise,set)=riseSet(sp)
             val w=WxState.data; val code=w?.code?:0; val cloud=w?.cloud?:10
             val dawnT=((m-(rise-40)).toFloat()/80f).coerceIn(0f,1f)
             val duskT=(((set+40)-m).toFloat()/80f).coerceIn(0f,1f)
             val day=minOf(dawnT,duskT)
+            val warm=(1f-minOf(abs(m-set),abs(m-rise)).toFloat()/60f).coerceIn(0f,1f)
             val rainy=code in 51..67||code in 80..82||code>=95
             val snowy=code in 71..77||code in 85..86
             val clock="%02d:%02d".format(now.hour,now.minute)
+            val vCol=when{ x.vGrid<80.0 -> RED; x.vGrid in 207.0..253.0 -> GREEN; else -> AMBER }
 
             Canvas(Modifier.fillMaxWidth().aspectRatio(360f/330f)){
               val k=size.width/360f
               val full=IntSize(size.width.toInt(),size.height.toInt())
               fun P(a:Float,b:Float)=Offset(a*k,b*k)
 
-              // 1) Photo, cropped to the scene aspect and centred on the house
+              // 1) Photo cropped to scene aspect, centred on the house
               val bw=photo.width; val bh=photo.height
               val srcW=minOf(bw,(bh*360f/330f).toInt())
               val srcX=((bw*0.62f)-srcW/2f).toInt().coerceIn(0,bw-srcW)
               drawImage(image=photo,srcOffset=IntOffset(srcX,0),srcSize=IntSize(srcW,bh),dstSize=full)
 
-              // 2) Time-of-day and weather tint
+              // 2) Night tint, sunrise/sunset warmth, weather grey
               drawRect(color=Color(0xFF050A18),alpha=(1f-day)*0.35f)
+              drawRect(brush=Brush.verticalGradient(listOf(Color.Transparent,Color(0xFFFF7A3D)),size.height*0.25f,size.height*0.8f),alpha=warm*0.35f)
               val greyA=if(rainy||snowy||cloud>70) 0.35f else if(cloud>40) 0.12f else 0f
               drawRect(color=Color(0xFF8A9BB0),alpha=greyA)
               drawRect(brush=Brush.verticalGradient(listOf(Color(0x99000000),Color.Transparent),0f,size.height*0.35f),size=Size(size.width,size.height*0.35f))
               drawRect(brush=Brush.verticalGradient(listOf(Color.Transparent,Color(0xCC000000)),size.height*0.7f,size.height),topLeft=Offset(0f,size.height*0.7f),size=Size(size.width,size.height*0.3f))
 
-              // 3) Stars at night, upper sky only
+              // 3) Lamp glow in the windows and porch, strongest after dark
+              val lampA=(1f-day)*(0.75f+0.1f*sin(tSec*1.7f))
+              if(lampA>0.02f){
+                listOf(P(89f,218f),P(193f,218f),P(277f,218f),P(319f,210f)).forEach{ c->
+                  drawCircle(brush=Brush.radialGradient(listOf(Color(0xCCFFD28A),Color.Transparent),center=c,radius=22f*k),radius=22f*k,center=c,alpha=lampA)
+                }
+              }
+
+              // 4) Stars at night, upper sky only
               val starA=(1f-day)*(if(cloud>60) 0.2f else 0.5f)
               if(starA>0.02f){
                 val rnd=java.util.Random(11)
@@ -6137,7 +6171,7 @@ jobs:
                 }
               }
 
-              // 4) Drifting clouds, density from live cloud cover
+              // 5) Drifting clouds, density from live cloud cover
               val nClouds=(when{ cloud<15->0; cloud<40->2; cloud<70->4; else->6 })+(if(rainy) 2 else 0)
               val cCol=lerp(Color(0xFFE8EEF7),Color(0xFF8E9BB3),1f-day)
               repeat(nClouds){ i->
@@ -6147,7 +6181,7 @@ jobs:
                 drawCloud(cx,cy,0.9f+(i%3)*0.25f,k,cCol,0.10f+0.30f*(cloud/100f))
               }
 
-              // 5) Rain, snow, fog, storm flash
+              // 6) Rain, snow, storm flash
               if(rainy){ repeat(40){ i->
                 val x0=((i*53)%360).toFloat(); val y0=((((i*41)%250).toFloat()+tSec*140f)%250f)+40f
                 if(y0<300f) drawLine(color=Color(0xFF9ED8FF),start=P(x0,y0),end=P(x0-5f,y0+12f),strokeWidth=1.2f*k,cap=StrokeCap.Round,alpha=0.4f)
@@ -6158,10 +6192,10 @@ jobs:
               } }
               if(code>=95&&(tSec%5f)>4.8f) drawRect(color=Color.White,alpha=0.12f)
 
-              // 6) Anchor points (design units), hub above the roof
+              // 7) Anchor points (design units)
               val H=P(180f,70f); val S=P(200f,150f); val G=P(70f,126f); val B=P(90f,206f); val L=P(306f,196f)
 
-              // 7) Curved, animated flows
+              // 8) Flows, thickness scales with watts
               flowLine(curve(S,H,-18f*k),AMBER,x.pv>20,x.pv.toDouble(),tSec,k)
               if(x.gridOut>20) flowLine(curve(H,G,-22f*k),CYAN,true,x.gridOut.toDouble(),tSec,k)
               else flowLine(curve(G,H,-22f*k),BLUE,x.gridIn>20,x.gridIn.toDouble(),tSec,k)
@@ -6169,7 +6203,7 @@ jobs:
               else flowLine(curve(H,B,-16f*k),if(x.charge>20) GREEN else DIM,x.charge>20,x.charge.toDouble(),tSec,k)
               flowLine(curve(H,L,-20f*k),VIOLET,x.load>20,x.load.toDouble(),tSec,k)
 
-              // 8) Hub: soft pulse when anything is flowing
+              // 9) Hub with pulse when anything is flowing
               val flowing=x.pv>20||x.gridIn>20||x.gridOut>20||x.charge>20||x.discharge>20||x.load>20
               val pulse=if(flowing) 0.5f+0.5f*sin(tSec*2.2f) else 0f
               drawCircle(color=GREEN.copy(alpha=0.10f+0.14f*pulse),radius=30f*k,center=H)
@@ -6177,12 +6211,12 @@ jobs:
               drawCircle(color=WHITE.copy(alpha=0.55f),radius=22f*k,center=H,style=Stroke(1.6f*k))
               drawCircle(color=GREEN,radius=3f*k,center=H,alpha=0.6f+0.4f*pulse)
 
-              // 9) Node dots
+              // 10) Node dots
               drawCircle(AMBER,5f*k,S); drawCircle(CYAN,5f*k,G)
               drawCircle(if(x.discharge>20) RED else GREEN,5f*k,B); drawCircle(VIOLET,5f*k,L)
 
-              // 10) Readouts
-              drawRoundRect(color=Color(0xB3060A12),topLeft=P(150f,108f),size=Size(92f*k,30f*k),cornerRadius=CornerRadius(8f*k))
+              // 11) Glass readouts
+              glass(P(150f,108f),Size(92f*k,30f*k),8f*k,AMBER,k)
               label(tm,"SOLAR",156f*k,113f*k,9f*k,AMBER)
               label(tm,kw(x.pv),156f*k,126f*k,14f*k,WHITE,mono=true,bold=true)
 
@@ -6191,14 +6225,31 @@ jobs:
               label(tm,wxText(w,day),236f*k,20f*k,11f*k,WHITE,bold=true)
               label(tm,clock,236f*k,36f*k,11f*k,DIM,mono=true)
 
-              drawRoundRect(color=Color(0xB3060A12),topLeft=P(8f,236f),size=Size(344f*k,64f*k),cornerRadius=CornerRadius(14f*k))
+              glass(P(8f,236f),Size(344f*k,64f*k),14f*k,CYAN,k)
               label(tm,if(x.gridOut>20) "TO GRID" else "FROM GRID",18f*k,246f*k,9f*k,if(x.gridOut>20) CYAN else BLUE)
               label(tm,kw(if(x.gridOut>20) x.gridOut else x.gridIn),18f*k,262f*k,14f*k,WHITE,mono=true,bold=true)
-              label(tm,"${x.vGrid.toInt()} V  \u00B7  ${"%.1f".format(x.fGrid)} Hz",18f*k,279f*k,9f*k,DIM,mono=true)
+              label(tm,"${x.vGrid.toInt()} V  \u00B7  ${"%.1f".format(x.fGrid)} Hz",18f*k,279f*k,9f*k,vCol,mono=true)
               label(tm,if(x.charge>20) "CHARGING" else if(x.discharge>20) "DISCHARGING" else "BATTERY",150f*k,246f*k,9f*k,GREEN,center=true)
               label(tm,"${x.soc}%",150f*k,262f*k,14f*k,WHITE,mono=true,bold=true,center=true)
               label(tm,"HOME",300f*k,246f*k,9f*k,VIOLET,center=true)
               label(tm,kw(x.load),300f*k,262f*k,14f*k,WHITE,mono=true,bold=true,center=true)
+
+              // 12) Recent trail: solar (amber) and load (violet), scaled to the peak in view
+              val n=Trail.pv.size
+              if(n>1){
+                val mx=maxOf(1f,Trail.pv.maxOrNull()?:0f,Trail.load.maxOrNull()?:0f)
+                fun trace(src:List<Float>,col:Color){
+                  val p=Path()
+                  src.forEachIndexed{ i,v->
+                    val px=(8f+344f*i/(n-1).toFloat())*k
+                    val py=(324f-18f*v/mx)*k
+                    if(i==0) p.moveTo(px,py) else p.lineTo(px,py)
+                  }
+                  drawPath(p,col.copy(alpha=0.85f),style=Stroke(1.4f*k,cap=StrokeCap.Round))
+                }
+                trace(Trail.load,VIOLET)
+                trace(Trail.pv,AMBER)
+              }
             }
           }
           EOF
