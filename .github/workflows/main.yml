@@ -2136,6 +2136,7 @@ jobs:
           import androidx.compose.ui.Alignment
           import androidx.compose.ui.Modifier
           import androidx.compose.ui.draw.clip
+          import androidx.compose.ui.geometry.CornerRadius
           import androidx.compose.ui.geometry.Offset
           import androidx.compose.ui.geometry.Size
           import androidx.compose.ui.graphics.*
@@ -2143,6 +2144,7 @@ jobs:
           import androidx.compose.ui.graphics.drawscope.Stroke
           import androidx.compose.ui.platform.LocalContext
           import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.text.rememberTextMeasurer
           import androidx.compose.ui.unit.Dp
           import androidx.compose.ui.unit.IntOffset
           import androidx.compose.ui.unit.IntSize
@@ -2168,7 +2170,28 @@ jobs:
             return (if(lat!=null&&lon!=null) sunTimes(lat,lon,LocalDate.now()) else null) ?: Pair(390,1110)
           }
 
-          /** Quadratic curve in 360x330 design units, scaled by k to pixels. */
+          private fun wxText(w:WxData?,day:Float):String{
+            if(w==null) return "Add location"
+            return when{
+              w.code==0 -> if(day<0.5f) "Clear night" else "Clear"
+              w.code in 1..3 -> "Partly cloudy"
+              w.code==45||w.code==48 -> "Fog"
+              w.code in 51..67||w.code in 80..82 -> "Rain"
+              w.code in 71..77||w.code in 85..86 -> "Snow"
+              w.code>=95 -> "Thunderstorm"
+              else -> "Cloudy"
+            }
+          }
+
+          /** Soft cloud from overlapping blobs, in 360-wide design units. */
+          private fun DrawScope.drawCloud(cx:Float,cy:Float,s:Float,k:Float,col:Color,a:Float){
+            drawRoundRect(color=col,topLeft=Offset((cx-38f*s)*k,(cy-6f*s)*k),size=Size(76f*s*k,22f*s*k),cornerRadius=CornerRadius(11f*s*k),alpha=a)
+            drawCircle(color=col,radius=15f*s*k,center=Offset((cx-14f*s)*k,(cy-6f*s)*k),alpha=a)
+            drawCircle(color=col,radius=20f*s*k,center=Offset((cx+6f*s)*k,(cy-10f*s)*k),alpha=a)
+            drawCircle(color=col,radius=13f*s*k,center=Offset((cx+26f*s)*k,(cy-4f*s)*k),alpha=a)
+          }
+
+          /** Quadratic curve in 360-wide design units, scaled by k to pixels. */
           private fun quad(x0:Float,y0:Float,cx:Float,cy:Float,x1:Float,y1:Float,k:Float):Path=Path().apply{
             moveTo(x0*k,y0*k)
             quadraticBezierTo(cx*k,cy*k,x1*k,y1*k)
@@ -2202,31 +2225,32 @@ jobs:
             Box(Modifier.offset(k*px,k*py).size(k*w,k*h)) { content() }
           }
 
-          /** Frosted glass card: dark translucent fill, gradient edge in the accent colour. */
+          /** Compact frosted glass card: dark translucent fill, gradient edge in the accent colour. */
           @Composable private fun GlassCard(ic:Path,col:Color,label:String,value:String,sub:String,extra:String=""){
             Row(
               Modifier.fillMaxSize()
-                .clip(RoundedCornerShape(18.dp))
+                .clip(RoundedCornerShape(14.dp))
                 .background(Brush.verticalGradient(listOf(Color(0x66121B26),Color(0xD9080D14))))
-                .border(1.dp,Brush.linearGradient(listOf(col,Color(0x33FFFFFF))),RoundedCornerShape(18.dp))
-                .padding(horizontal=12.dp,vertical=8.dp),
-              horizontalArrangement=Arrangement.spacedBy(10.dp),
+                .border(1.dp,Brush.linearGradient(listOf(col,Color(0x33FFFFFF))),RoundedCornerShape(14.dp))
+                .padding(horizontal=10.dp,vertical=5.dp),
+              horizontalArrangement=Arrangement.spacedBy(8.dp),
               verticalAlignment=Alignment.CenterVertically
             ){
-              Ico(ic,col,30)
+              Ico(ic,col,26)
               Column(verticalArrangement=Arrangement.Center){
-                Text(label,color=Color.White,fontSize=11.sp,maxLines=1)
-                Text(value,color=Color.White,fontSize=17.sp,fontWeight=FontWeight.Medium,maxLines=1)
-                Text(sub,color=col,fontSize=11.sp,maxLines=1)
-                if(extra.isNotEmpty()) Text(extra,color=Color(0xFFB8C4D4),fontSize=11.sp,maxLines=1)
+                Text(label,color=Color.White,fontSize=10.sp,maxLines=1)
+                Text(value,color=Color.White,fontSize=15.sp,fontWeight=FontWeight.Medium,maxLines=1)
+                Text(sub,color=col,fontSize=10.sp,maxLines=1)
+                if(extra.isNotEmpty()) Text(extra,color=Color(0xFFB8C4D4),fontSize=10.sp,maxLines=1)
               }
             }
           }
 
-          /** Sky scene replicating the reference design: photo, glass cards for solar, grid, load and battery, a glowing hub and curved power flows. */
+          /** Compact sky scene: photo, weather, glass cards for solar (per string), grid (V and Hz), load and battery, glowing hub and curved power flows. */
           @Composable fun SkyScene(x:Lux,rt:String){
             val ctx=LocalContext.current
             val sp=ctx.getSharedPreferences("c",0)
+            val tm=rememberTextMeasurer()
             val photo=remember{ BitmapFactory.decodeResource(ctx.resources,R.drawable.house_photo).asImageBitmap() }
             var tSec by remember{ mutableStateOf(0f) }
             LaunchedEffect(Unit){
@@ -2240,6 +2264,11 @@ jobs:
             val day=minOf(dawnT,duskT)
             val warm=(1f-minOf(abs(m-set),abs(m-rise)).toFloat()/60f).coerceIn(0f,1f)
 
+            val w=WxState.data; val code=w?.code?:0; val cloud=w?.cloud?:10
+            val rainy=code in 51..67||code in 80..82||code>=95
+            val snowy=code in 71..77||code in 85..86
+            val clock="%02d:%02d".format(now.hour,now.minute)
+
             val cap=sp.getString("c","15.36")!!
             val solarPct=(x.pv*100/11500).coerceIn(0,100)
             val loadPct=(x.load*100/11500).coerceIn(0,100)
@@ -2249,40 +2278,76 @@ jobs:
             val chgA=if(x.vBat>0.0) (x.charge-x.discharge)/x.vBat else 0.0
             val gridCol=Color(0xFFE5E7EB)
             val loadCol=Color(0xFF38BDF8)
+            val vCol=when{ x.vGrid<80.0 -> RED; x.vGrid in 207.0..253.0 -> GREEN; else -> AMBER }
 
-            Box(Modifier.fillMaxWidth().aspectRatio(360f/330f)){
+            Box(Modifier.fillMaxWidth().aspectRatio(360f/250f)){
               Canvas(Modifier.matchParentSize()){
                 val k=size.width/360f
-                // Photo, cropped to the scene aspect and centred on the house
+                // Photo cropped to the scene aspect, centred on the house
                 val bw=photo.width; val bh=photo.height
-                val srcW=minOf(bw,(bh*360f/330f).toInt())
+                val srcW=minOf(bw,(bh*360f/250f).toInt())
                 val srcX=((bw*0.62f)-srcW/2f).toInt().coerceIn(0,bw-srcW)
                 drawImage(image=photo,srcOffset=IntOffset(srcX,0),srcSize=IntSize(srcW,bh),dstSize=IntSize(size.width.toInt(),size.height.toInt()))
+                // Time of day and weather tint
                 drawRect(Color(0xFF050A18),alpha=(1f-day)*0.35f)
                 drawRect(Brush.verticalGradient(listOf(Color.Transparent,Color(0xFFFF7A3D)),size.height*0.25f,size.height*0.8f),alpha=warm*0.35f)
+                val greyA=if(rainy||snowy||cloud>70) 0.35f else if(cloud>40) 0.12f else 0f
+                drawRect(Color(0xFF8A9BB0),alpha=greyA)
+                // Stars at night, upper sky only
+                val starA=(1f-day)*(if(cloud>60) 0.2f else 0.5f)
+                if(starA>0.02f){
+                  val rnd=java.util.Random(11)
+                  repeat(40){
+                    val sx=rnd.nextFloat()*360f; val sy=rnd.nextFloat()*60f; val ph=rnd.nextFloat()*6.28f
+                    drawCircle(Color.White,radius=(0.6f+rnd.nextFloat()*0.8f)*k,center=Offset(sx*k,sy*k),alpha=starA*(0.55f+0.45f*sin(tSec*1.3f+ph)))
+                  }
+                }
+                // Drifting clouds, density from live cloud cover
+                val nClouds=(when{ cloud<15->0; cloud<40->2; cloud<70->4; else->6 })+(if(rainy) 2 else 0)
+                val cCol=lerp(Color(0xFFE8EEF7),Color(0xFF8E9BB3),1f-day)
+                repeat(nClouds){ i->
+                  val speed=3f+(i%3)*2f
+                  val cx=((((i*97+40)%400)+tSec*speed)%420f)-30f
+                  val cy=12f+((i*29)%26).toFloat()
+                  drawCloud(cx,cy,0.8f+(i%3)*0.2f,k,cCol,0.10f+0.30f*(cloud/100f))
+                }
+                // Rain, snow and storm flash
+                if(rainy){ repeat(36){ i->
+                  val x0=((i*53)%360).toFloat(); val y0=((((i*41)%220).toFloat()+tSec*140f)%220f)+30f
+                  if(y0<250f) drawLine(color=Color(0xFF9ED8FF),start=Offset(x0*k,y0*k),end=Offset((x0-5f)*k,(y0+12f)*k),strokeWidth=1.2f*k,cap=StrokeCap.Round,alpha=0.4f)
+                } }
+                if(snowy){ repeat(30){ i->
+                  val x0=((i*61)%360).toFloat(); val y0=((((i*43)%220).toFloat()+tSec*120f)%220f)+30f
+                  if(y0<250f) drawCircle(Color.White,radius=1.8f*k,center=Offset(x0*k,y0*k),alpha=0.7f)
+                } }
+                if(code>=95&&(tSec%5f)>4.8f) drawRect(Color.White,alpha=0.12f)
 
-                // Power flows
-                flowLine(quad(140f,70f,158f,70f,159f,97f,k),AMBER,x.pv>20,x.pv.toDouble(),tSec,k)
-                if(x.gridOut>20) flowLine(quad(159f,139f,152f,152f,132f,155f,k),gridCol,true,x.gridOut.toDouble(),tSec,k)
-                else flowLine(quad(132f,155f,152f,152f,159f,139f,k),gridCol,x.gridIn>20,x.gridIn.toDouble(),tSec,k)
-                flowLine(quad(210f,118f,222f,116f,232f,112f,k),GREEN,x.load>20,x.load.toDouble(),tSec,k)
-                if(x.discharge>20) flowLine(quad(180f,214f,180f,181f,180f,148f,k),GREEN,true,x.discharge.toDouble(),tSec,k)
-                else flowLine(quad(180f,148f,180f,181f,180f,214f,k),GREEN,x.charge>20,x.charge.toDouble(),tSec,k)
+                // Power flows (design units: hub centre 180,108 radius 26)
+                flowLine(quad(140f,45f,158f,48f,162f,90f,k),AMBER,x.pv>20,x.pv.toDouble(),tSec,k)
+                if(x.gridOut>20) flowLine(quad(162f,126f,156f,140f,140f,143f,k),gridCol,true,x.gridOut.toDouble(),tSec,k)
+                else flowLine(quad(140f,143f,156f,140f,162f,126f,k),gridCol,x.gridIn>20,x.gridIn.toDouble(),tSec,k)
+                flowLine(quad(198f,90f,210f,80f,220f,73f,k),GREEN,x.load>20,x.load.toDouble(),tSec,k)
+                if(x.discharge>20) flowLine(quad(180f,186f,180f,160f,180f,134f,k),GREEN,true,x.discharge.toDouble(),tSec,k)
+                else flowLine(quad(180f,134f,180f,160f,180f,186f,k),GREEN,x.charge>20,x.charge.toDouble(),tSec,k)
 
                 // Glowing hub with house icon
-                val hub=Offset(180f*k,118f*k)
+                val hub=Offset(180f*k,108f*k)
                 val pulse=0.5f+0.5f*sin(tSec*2.2f)
-                drawCircle(GREEN,radius=42f*k,center=hub,alpha=0.14f+0.12f*pulse)
-                drawCircle(Color(0xFF0C131B),radius=30f*k,center=hub,alpha=0.92f)
-                drawCircle(GREEN,radius=30f*k,center=hub,style=Stroke(2.5f*k),alpha=0.9f)
-                icon(I_HOME,Color.White,hub,34f*k,false)
+                drawCircle(GREEN,radius=34f*k,center=hub,alpha=0.14f+0.12f*pulse)
+                drawCircle(Color(0xFF0C131B),radius=26f*k,center=hub,alpha=0.92f)
+                drawCircle(GREEN,radius=26f*k,center=hub,style=Stroke(2.2f*k),alpha=0.9f)
+                icon(I_HOME,Color.White,hub,28f*k,false)
+
+                // Weather and time, top right
+                label(tm,wxText(w,day),236f*k,12f*k,11f*k,Color.White,bold=true)
+                label(tm,clock,236f*k,27f*k,10f*k,Color(0xFF9AA8BA),mono=true)
               }
               BoxWithConstraints(Modifier.matchParentSize()){
                 val k=maxWidth/360f
-                Pos(k,6f,34f,134f,72f){ GlassCard(I_SOL,AMBER,"Solar","%,d W".format(x.pv),"$solarPct% of inverter") }
-                Pos(k,6f,122f,126f,66f){ GlassCard(I_GRID,Color(0xFFE5E7EB),gridLabel,"%,d W".format(gridW),"$gridPct% of home") }
-                Pos(k,232f,76f,122f,72f){ GlassCard(I_HOME,loadCol,"Load","%,d W".format(x.load),"$loadPct% of inverter") }
-                Pos(k,118f,214f,150f,96f){ GlassCard(I_BAT,GREEN,"Battery","${x.soc}%","%.1f V | %.1f A".format(x.vBat,chgA),"$cap kWh") }
+                Pos(k,4f,10f,136f,70f){ GlassCard(I_SOL,AMBER,"Solar","%,d W".format(x.pv),"$solarPct%  S1 ${x.pv1} · S2 ${x.pv2} · S3 ${x.pv3} W") }
+                Pos(k,220f,40f,136f,66f){ GlassCard(I_HOME,loadCol,"Load","%,d W".format(x.load),"$loadPct% of inverter") }
+                Pos(k,4f,110f,136f,66f){ GlassCard(I_GRID,gridCol,gridLabel,"%,d W".format(gridW),"$gridPct% of home","%.0f V · %.2f Hz".format(x.vGrid,x.fGrid)) }
+                Pos(k,115f,186f,130f,62f){ GlassCard(I_BAT,GREEN,"Battery","${x.soc}%","%.1f V | %.1f A".format(x.vBat,chgA),"$cap kWh") }
               }
             }
           }
