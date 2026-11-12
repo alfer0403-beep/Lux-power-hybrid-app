@@ -26,6 +26,7 @@ jobs:
           cd proj
           mkdir -p app
           mkdir -p app/src/main
+          mkdir -p app/src/main/assets/villa
           mkdir -p app/src/main/java/com/lux/monitor
           mkdir -p app/src/main/res/drawable
           mkdir -p app/src/main/res/layout
@@ -64,6 +65,277 @@ jobs:
           <receiver android:name=".LuxFlowWidget" android:exported="true"><intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE"/></intent-filter><meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_flow_info"/></receiver>
           <receiver android:name=".BootReceiver" android:exported="true"><intent-filter><action android:name="android.intent.action.BOOT_COMPLETED"/></intent-filter></receiver>
           </application></manifest>
+          EOF
+          cat > app/src/main/assets/villa/index.html <<'EOF'
+          <!doctype html>
+          <html lang="en"><head><meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+          <title>Villa Scene — Lux Monitor Background</title>
+          <style>
+          :root{--bg:#0d161b;--panel:rgba(13,22,27,.8);--fg:#f2f4f1;--mut:#b9c6c1;--line:rgba(255,255,255,.18);color-scheme:dark;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+          *{box-sizing:border-box}html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,Segoe UI,sans-serif}
+          #scene{position:fixed;inset:0}
+          #hud{position:fixed;left:14px;top:calc(12px + env(safe-area-inset-top,0px));z-index:2;font-size:13px;padding:7px 12px;border-radius:999px;background:var(--panel);border:1px solid var(--line);backdrop-filter:blur(10px);pointer-events:none}
+          #panel{position:fixed;z-index:3;right:12px;left:12px;bottom:calc(12px + env(safe-area-inset-bottom,0px));max-width:340px;margin-left:auto;padding:12px 14px;border-radius:16px;background:var(--panel);border:1px solid var(--line);backdrop-filter:blur(14px);font-size:12px}
+          #panel summary{cursor:pointer;letter-spacing:.1em;text-transform:uppercase;color:var(--mut);font-size:11px}
+          .row{display:grid;grid-template-columns:78px 1fr;gap:10px;align-items:center;margin:10px 0}
+          .row input[type=range],select{width:100%}select{background:#1b2b30;color:#fff;border:1px solid var(--line);border-radius:8px;padding:7px}
+          input[type=range]{accent-color:#d6b47b}label{color:var(--mut)}
+          #load{position:fixed;inset:0;display:grid;place-items:center;background:var(--bg);z-index:9}
+          </style></head><body>
+          <div id="scene"></div><div id="load">Preparing the villa…</div><div id="hud"></div>
+          <details id="panel" open><summary>Scene data</summary>
+          <div class="row"><label>Time <b id="tl"></b></label><input id="time" type="range" min="0" max="24" step=".05"></div>
+          <div class="row"><label>Weather</label><select id="wx"><option value="clear">Clear</option><option value="partly">Partly cloudy</option><option value="cloudy">Overcast</option><option value="rain">Rain</option><option value="storm">Thunderstorm</option><option value="fog">Coastal mist</option></select></div>
+          <div class="row"><label>Lux <b id="ll"></b></label><input id="lux" type="range" min="0" max="5" step=".02"></div>
+          <div class="row"><label>Options</label><span><input id="uselux" type="checkbox"> use lux &nbsp; <input id="live" type="checkbox"> live clock</span></div>
+          <div class="row"><label>Quality</label><select id="qs"><option value="low">Low (battery)</option><option value="med">Medium</option><option value="high">High</option></select></div>
+          </details>
+          <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+          <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+          <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/shaders/CopyShader.js"></script>
+          <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+          <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/postprocessing/EffectComposer.js"></script>
+          <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/postprocessing/RenderPass.js"></script>
+          <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/postprocessing/ShaderPass.js"></script>
+          <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
+          <script>
+          THREE.ColorManagement.legacyMode=false;
+          const $=s=>document.querySelector(s),clamp=(x,a,b)=>Math.min(b,Math.max(a,x)),lerp=(a,b,t)=>a+(b-a)*t;
+          const ss=(a,b,x)=>{x=clamp((x-a)/(b-a),0,1);return x*x*(3-2*x)};
+          const C3=(r,g,b)=>new THREE.Color().setRGB(r,g,b),lin=c=>c.clone().convertSRGBToLinear();
+          // ---------- renderer ----------
+          const scene=new THREE.Scene();scene.fog=new THREE.Fog(0x9ab8c8,70,190);
+          const cam=new THREE.PerspectiveCamera(40,innerWidth/innerHeight,.1,700);cam.position.set(12,6.5,30);
+          const R=new THREE.WebGLRenderer({antialias:true});R.setPixelRatio(Math.min(devicePixelRatio,1.75));R.setSize(innerWidth,innerHeight);
+          R.shadowMap.enabled=true;R.shadowMap.type=THREE.PCFSoftShadowMap;R.outputEncoding=THREE.sRGBEncoding;R.toneMapping=THREE.ACESFilmicToneMapping;
+          $('#scene').appendChild(R.domElement);
+          const ctl=new THREE.OrbitControls(cam,R.domElement);ctl.target.set(0,2,0);ctl.enableDamping=true;ctl.enablePan=false;
+          ctl.minAzimuthAngle=-.8;ctl.maxAzimuthAngle=.8;ctl.minPolarAngle=.8;ctl.maxPolarAngle=1.5;ctl.minDistance=14;ctl.maxDistance=45;ctl.autoRotate=true;ctl.autoRotateSpeed=.25;
+          let idle;ctl.addEventListener('start',()=>{ctl.autoRotate=false;clearTimeout(idle)});ctl.addEventListener('end',()=>{idle=setTimeout(()=>ctl.autoRotate=true,4000)});
+          // ---------- helpers ----------
+          const M=(c,r=.8,m=0)=>new THREE.MeshStandardMaterial({color:c,roughness:r,metalness:m});
+          const B=(w,h,d,m,x,y,z,p=scene)=>{const o=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),m);o.position.set(x,y,z);o.castShadow=o.receiveShadow=true;p.add(o);return o};
+          const Cy=(r1,r2,h,m,x,y,z,p=scene)=>{const o=new THREE.Mesh(new THREE.CylinderGeometry(r1,r2,h,10),m);o.position.set(x,y,z);o.castShadow=true;p.add(o);return o};
+          const rnd=(a,b)=>a+Math.random()*(b-a);
+          const Q0=new URLSearchParams(location.search).get('q')||(innerWidth<700?'med':'high');let TW=Q0==='low'?256:Q0==='med'?512:1024,TXSKIP=false;const TXR=[];
+          function paint(o){const w=TW,c=o.c;c.width=c.height=w;o.fn(c.getContext('2d'),w);o.t.dispose();o.t.needsUpdate=true;
+           if(o.nm){const d=c.getContext('2d').getImageData(0,0,w,w).data,h=new Float32Array(w*w),k=o.k;for(let i=0;i<w*w;i++)h[i]=(d[i*4]*.3+d[i*4+1]*.59+d[i*4+2]*.11)/255;
+            const nc=o.nm.image;nc.width=nc.height=w;const ng=nc.getContext('2d'),im=ng.createImageData(w,w);
+            for(let y=0;y<w;y++)for(let x=0;x<w;x++){const l=h[y*w+(x+w-1)%w],r=h[y*w+(x+1)%w],u=h[((y+w-1)%w)*w+x],dn=h[((y+1)%w)*w+x],nx=(l-r)*k,ny=(dn-u)*k,m=Math.hypot(nx,ny,1),j=(y*w+x)*4;im.data[j]=(nx/m*.5+.5)*255;im.data[j+1]=(ny/m*.5+.5)*255;im.data[j+2]=(1/m*.5+.5)*255;im.data[j+3]=255}
+            ng.putImageData(im,0,0);o.nm.dispose();o.nm.needsUpdate=true}}
+          function tx(fn,rx,ry,nm){const c=document.createElement('canvas'),t=new THREE.CanvasTexture(c);t.wrapS=t.wrapT=THREE.RepeatWrapping;t.repeat.set(rx,ry);t.encoding=THREE.sRGBEncoding;t.anisotropy=8;if(TXSKIP)return t;
+           const o={t,fn,c,nm:null,k:nm};if(nm){const n=new THREE.CanvasTexture(document.createElement('canvas'));n.wrapS=n.wrapT=THREE.RepeatWrapping;n.repeat.set(rx,ry);n.anisotropy=8;o.nm=t.nm=n}TXR.push(o);paint(o);return t}
+          // ---------- sky dome ----------
+          const sky=new THREE.Mesh(new THREE.SphereGeometry(450,32,16),new THREE.ShaderMaterial({side:THREE.BackSide,depthWrite:false,fog:false,
+          uniforms:{top:{value:new THREE.Color()},hor:{value:new THREE.Color()},sd:{value:new THREE.Vector3(0,1,0)},sc:{value:new THREE.Color()},md:{value:new THREE.Vector3(0,-1,0)},st:{value:0}},
+          vertexShader:'varying vec3 p;void main(){p=normalize(position);gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}',
+          fragmentShader:'varying vec3 p;uniform vec3 top,hor,sd,sc,md;uniform float st;float h(vec3 q){return fract(sin(dot(q,vec3(12.9,78.2,37.7)))*43758.5);}void main(){float y=max(p.y,0.);vec3 c=mix(hor,top,pow(y,.55));float d=max(dot(p,sd),0.);c+=sc*(pow(d,1200.)*10.+pow(d,120.)*1.2+pow(d,10.)*.3);float s=step(.9965,h(floor(p*260.)))*st*smoothstep(.05,.3,p.y);c+=vec3(s);c+=vec3(.8,.85,.95)*pow(max(dot(p,md),0.),1500.)*st;gl_FragColor=vec4(c,1.);gl_FragColor=linearToOutputTexel(gl_FragColor);}'}));
+          scene.add(sky);
+          const envS=new THREE.Scene();envS.add(new THREE.Mesh(sky.geometry,sky.material));
+          const pmrem=new THREE.PMREMGenerator(R);let envRT=null,envT=-9;
+          function updEnv(t){if(t-envT<2.5)return;envT=t;const rt=pmrem.fromScene(envS,0,.1,1000);if(envRT)envRT.dispose();envRT=rt;scene.environment=rt.texture}
+          // ---------- lights ----------
+          const hemi=new THREE.HemisphereLight(0xffffff,0x3a4a2a,1);scene.add(hemi);
+          const sun=new THREE.DirectionalLight(0xffffff,3);sun.castShadow=true;sun.shadow.mapSize.set(innerWidth<700?2048:4096,innerWidth<700?2048:4096);
+          Object.assign(sun.shadow.camera,{left:-38,right:38,top:38,bottom:-38,near:1,far:220});sun.shadow.bias=-.0004;sun.shadow.normalBias=.04;scene.add(sun,sun.target);
+          const moon=new THREE.DirectionalLight(0x9db4ff,0);scene.add(moon);
+          const flashL=new THREE.PointLight(0xdde8ff,0,300);flashL.position.set(0,60,-30);scene.add(flashL);
+          // ---------- ground, sea ----------
+          const cv=document.createElement('canvas');cv.width=cv.height=256;{const g=cv.getContext('2d');g.fillStyle='#4f7a3f';g.fillRect(0,0,256,256);
+          for(let i=0;i<5000;i++){g.fillStyle=`hsl(${rnd(80,110)},${rnd(35,55)}%,${rnd(22,42)}%)`;g.fillRect(rnd(0,256),rnd(0,256),1.5,rnd(2,5))}}
+          const gt=new THREE.CanvasTexture(cv);gt.wrapS=gt.wrapT=THREE.RepeatWrapping;gt.repeat.set(70,70);gt.encoding=THREE.sRGBEncoding;
+          const gt2=tx((g,w)=>{const s=w/256;g.fillStyle='#4a7339';g.fillRect(0,0,w,w);for(let i=0;i<18;i++){g.fillStyle=`hsla(${rnd(70,110)},45%,${rnd(22,38)}%,.35)`;g.beginPath();g.arc(rnd(0,w),rnd(0,w),rnd(15,50)*s,0,6.3);g.fill()}for(let i=0;i<9000*s*s;i++){g.fillStyle=`hsl(${rnd(75,115)},${rnd(35,60)}%,${rnd(18,46)}%)`;g.fillRect(rnd(0,w),rnd(0,w),1.3*s,rnd(2,6)*s)}},70,70,1.5);
+          const grass=new THREE.MeshStandardMaterial({map:gt2,normalMap:gt2.nm,roughness:.95});
+          const ground=B(200,.5,240,grass,82,-.25,0);
+          (()=>{const sm=M(0xffffff,.95),t=tx((g,w)=>{g.fillStyle='#c9b98f';g.fillRect(0,0,w,w);for(let i=0;i<12000*(w/256)**2;i++){g.fillStyle=Math.random()<.5?'rgba(120,100,70,.15)':'rgba(255,245,220,.18)';g.fillRect(rnd(0,w),rnd(0,w),1.5,1.5)}},3,50,1);sm.map=t;sm.normalMap=t.nm;B(14,.3,240,sm,-25,-.15,0)})();
+          const water=new THREE.Mesh(new THREE.PlaneGeometry(170,220,48,48),new THREE.MeshStandardMaterial({color:0x1f6f85,roughness:.2,metalness:.15}));
+          water.rotation.x=-Math.PI/2;water.position.set(-117,-.05,0);scene.add(water);
+          for(let i=0;i<8;i++){const h=new THREE.Mesh(new THREE.SphereGeometry(1,24,14),M(i%2?0x2d5a3a:0x3c6b43,1));h.scale.set(rnd(25,45),rnd(6,14),rnd(14,24));h.position.set(-10+i*28,0,-75-rnd(0,25));scene.add(h)}
+          // ---------- procedural detail: textures, foam, AO, grass blades ----------
+
+          const wn=tx((g,w)=>{g.fillStyle='#808080';g.fillRect(0,0,w,w);for(let i=0;i<2500;i++){g.fillStyle=`hsla(0,0%,${rnd(20,85)}%,.3)`;g.beginPath();g.ellipse(rnd(0,w),rnd(0,w),rnd(2,14),rnd(1,4),rnd(0,3),0,6.3);g.fill()}},12,16,1.5);
+          water.material.normalMap=wn.nm;water.material.normalScale.set(.6,.6);water.material.envMapIntensity=1.4;
+          const foam=new THREE.Mesh(new THREE.PlaneGeometry(4,220),new THREE.MeshBasicMaterial({transparent:true,opacity:.5,depthWrite:false,map:tx((g,w)=>{const r=g.createLinearGradient(0,0,w,0);r.addColorStop(0,'rgba(255,255,255,0)');r.addColorStop(.7,'rgba(255,255,255,.9)');r.addColorStop(1,'rgba(255,255,255,0)');g.fillStyle=r;g.fillRect(0,0,w,w)},1,1)}));
+          foam.rotation.x=-Math.PI/2;foam.position.set(-31,.03,0);scene.add(foam);
+          const ao=new THREE.Mesh(new THREE.PlaneGeometry(26,18),new THREE.MeshBasicMaterial({transparent:true,depthWrite:false,map:tx((g,w)=>{const r=g.createRadialGradient(w/2,w/2,w*.2,w/2,w/2,w/2);r.addColorStop(0,'rgba(0,0,0,.55)');r.addColorStop(1,'rgba(0,0,0,0)');g.fillStyle=r;g.fillRect(0,0,w,w)},1,1)}));
+          ao.rotation.x=-Math.PI/2;ao.position.set(0,.02,3);scene.add(ao);
+          const bladeU={uTime:{value:0},uWind:{value:.3}};
+          {const g=new THREE.ConeGeometry(.035,.45,3);g.translate(0,.225,0);const bm=new THREE.MeshStandardMaterial({color:0xffffff,roughness:.9});
+          bm.onBeforeCompile=s=>{s.uniforms.uTime=bladeU.uTime;s.uniforms.uWind=bladeU.uWind;s.vertexShader='uniform float uTime;uniform float uWind;\n'+s.vertexShader.replace('#include <begin_vertex>','#include <begin_vertex>\ntransformed.x+=sin(uTime*2.+instanceMatrix[3].x*.8+instanceMatrix[3].z*.5)*position.y*(.25+uWind)*.6;')};
+          const NB=16000,im=new THREE.InstancedMesh(g,bm,NB),d=new THREE.Object3D(),col=new THREE.Color();let n=0;
+          while(n<NB){const x=rnd(-17,45),z=rnd(-8,45);if((z<10.5&&Math.abs(x)<11)||(Math.abs(x)<2.2&&z>9))continue;d.position.set(x,0,z);d.rotation.set(rnd(-.2,.2),rnd(0,6.3),rnd(-.2,.2));d.scale.set(1,rnd(.6,1.4),1);d.updateMatrix();im.setMatrixAt(n,d.matrix);col.setHSL(rnd(.22,.3),rnd(.45,.65),rnd(.2,.34));im.setColorAt(n,col);n++}
+          im.receiveShadow=true;scene.add(im)}
+          TXSKIP=true;
+          // ---------- villa ----------
+          const concrete=M(0xb0aea3),cream=M(0xe9e2d3),dark=M(0x252c2e,.5,.3);
+          const stone=M(0xffffff,.95),stT=tx((g,w)=>{g.fillStyle='#4f4a43';g.fillRect(0,0,w,w);for(let y=0;y<8;y++){let x=-rnd(0,30);while(x<w){const bw=rnd(30,60);g.fillStyle=`hsl(${rnd(28,42)},${rnd(8,18)}%,${rnd(48,68)}%)`;g.fillRect(x+2,y*w/8+2,bw-4,w/8-4);x+=bw}}},2,3);stone.map=stone.bumpMap=stT;stone.bumpScale=2;
+          const wood=M(0xffffff,.65);wood.map=wood.bumpMap=tx((g,w)=>{g.fillStyle='#8a5e3e';g.fillRect(0,0,w,w);for(let i=0;i<400;i++){g.fillStyle=`rgba(${rnd(40,90)|0},${rnd(25,50)|0},15,.25)`;g.fillRect(rnd(0,w),0,rnd(1,3),w)}},1,1);
+          const roofm=M(0xffffff,.45,.4);roofm.map=roofm.bumpMap=tx((g,w)=>{g.fillStyle='#3a4547';g.fillRect(0,0,w,w);for(let x=0;x<w;x+=32){g.fillStyle='#667479';g.fillRect(x,0,3,w);g.fillStyle='#232b2d';g.fillRect(x+3,0,2,w)}},6,1);
+          const plank=tx((g,w)=>{g.fillStyle='#b8a285';g.fillRect(0,0,w,w);for(let y=0;y<w;y+=32){g.fillStyle='#6b5a44';g.fillRect(0,y,w,2);for(let i=0;i<30;i++){g.fillStyle=`rgba(90,70,45,.18)`;g.fillRect(rnd(0,w),y+3,rnd(10,60),1)}}},2,5);
+          const deckM=M(0xffffff,.65),floorM=M(0xd0a878,.45);deckM.map=deckM.bumpMap=floorM.map=floorM.bumpMap=plank;
+          TXSKIP=false;
+          {const S=(m,t,ns)=>{m.map=t;m.bumpMap=null;m.normalMap=t.nm;m.normalScale.set(ns,ns);m.needsUpdate=true};
+          const stoneFn=(g,w)=>{const s=w/256,rows=8,rh=w/rows;g.fillStyle='#3d3a35';g.fillRect(0,0,w,w);for(let y=0;y<rows;y++){let x=-rnd(0,30*s);while(x<w){const bw=rnd(30,62)*s;g.fillStyle=`hsl(${rnd(26,44)},${rnd(8,20)}%,${rnd(46,70)}%)`;g.fillRect(x+2*s,y*rh+2*s,bw-4*s,rh-4*s);for(let k=0;k<60*s*s;k++){g.fillStyle=Math.random()<.5?'rgba(0,0,0,.09)':'rgba(255,255,255,.09)';g.fillRect(x+rnd(0,bw),y*rh+rnd(0,rh),2*s,2*s)}x+=bw}}};
+          const woodFn=(g,w)=>{const s=w/256;g.fillStyle='#8a5e3e';g.fillRect(0,0,w,w);for(let i=0;i<500*s;i++){const a=rnd(.05,.3);g.fillStyle=Math.random()<.6?`rgba(50,28,12,${a})`:`rgba(190,140,90,${a*.6})`;g.fillRect(rnd(0,w),0,rnd(.6,2.5)*s,w)}for(let i=0;i<3;i++){g.strokeStyle='rgba(40,22,10,.35)';g.lineWidth=2*s;g.beginPath();g.ellipse(rnd(0,w),rnd(0,w),4*s,16*s,0,0,6.3);g.stroke()}};
+          const roofFn=(g,w)=>{const s=w/256;g.fillStyle='#3a4547';g.fillRect(0,0,w,w);for(let i=0;i<4000*s;i++){g.fillStyle=Math.random()<.5?'rgba(255,255,255,.05)':'rgba(0,0,0,.08)';g.fillRect(rnd(0,w),rnd(0,w),1,rnd(4,20)*s)}for(let x=0;x<w;x+=w/8){g.fillStyle='#7b898e';g.fillRect(x,0,3*s,w);g.fillStyle='#1f2628';g.fillRect(x+3*s,0,2*s,w)}};
+          const plankFn=(g,w)=>{const s=w/256,n=8;g.fillStyle='#b8a285';g.fillRect(0,0,w,w);for(let r=0;r<n;r++){const y=r*w/n;g.fillStyle=`hsl(${rnd(30,38)},${rnd(18,30)}%,${rnd(56,68)}%)`;g.fillRect(0,y,w,w/n);for(let i=0;i<40;i++){g.fillStyle='rgba(90,70,45,.18)';g.fillRect(rnd(0,w),y+rnd(3,w/n-3),rnd(10,70)*s,s)}g.fillStyle='#4d3f2e';g.fillRect(0,y,w,2.5*s)}};
+          const concFn=(g,w)=>{g.fillStyle='#aaa89e';g.fillRect(0,0,w,w);for(let i=0;i<8000*(w/256)**2;i++){g.fillStyle=Math.random()<.5?'rgba(0,0,0,.07)':'rgba(255,255,255,.08)';g.fillRect(rnd(0,w),rnd(0,w),1.5,1.5)}};
+          S(stone,tx(stoneFn,2,3,2.5),1.4);S(wood,tx(woodFn,1,1,1.2),.8);S(roofm,tx(roofFn,6,1,1.5),.8);const pl=tx(plankFn,2,3,1.5);S(deckM,pl,.9);S(floorM,pl,.9);concrete.color.set(0xffffff);S(concrete,tx(concFn,4,2,1.2),.7)}
+          const intMat=new THREE.MeshStandardMaterial({color:0xf1dcc0,roughness:.9,emissive:0xffb066,emissiveIntensity:0});
+          const lampMat=new THREE.MeshStandardMaterial({color:0xffe2b0,emissive:0xffc27a,emissiveIntensity:0});
+          const glass=new THREE.MeshPhysicalMaterial({color:0x9cc0c6,roughness:.05,metalness:.2,transparent:true,opacity:.3});
+          B(20,.4,11,concrete,0,.2,0);B(19,.2,4.6,deckM,0,.3,6.9);B(17,.1,9.2,floorM,0,.45,0);
+          B(17,3.3,.3,intMat,0,2.1,-4.5);B(.4,3.3,9.2,stone,-8.5,2.1,0);B(.4,3.3,9.2,stone,8.5,2.1,0);
+          B(.1,3,9,intMat,-8.2,2.1,0);B(.1,3,9,intMat,8.2,2.1,0);B(17,.2,9.2,intMat,0,3.65,0);
+          for(const x of [-3.6,-1.2,1.2,3.6]){B(2.3,2.9,.06,glass,x,1.95,4.6);B(.07,3,.1,dark,x+1.17,1.95,4.62)}
+          B(11.2,.14,.16,dark,0,3.55,4.65);
+          B(1.3,2.7,.14,wood,-7.2,1.8,4.62);B(1,3.3,.9,stone,-6,2.1,4.7);B(1.1,3.3,1,stone,5.6,2.1,4.7);
+          for(let i=0;i<7;i++)B(.1,3,.16,wood,6.6+i*.23,2.1,4.65);
+          const rA=B(21,.3,9,roofm,0,4,4.7);rA.rotation.x=.1;const rB=B(21,.3,5.4,roofm,0,4.18,-2.4);rB.rotation.x=-.1;
+          const pm=new THREE.MeshStandardMaterial({color:0x132b44,metalness:.7,roughness:.22});
+          for(let r=0;r<2;r++)for(let c=0;c<5;c++){const p=B(3.6,.06,1.4,pm,-7.6+c*3.8,r?4.16:4.36,r?5:3);p.rotation.x=.1}
+          for(const x of [-8.6,-3,3,8.6])Cy(.13,.16,3.1,dark,x,1.95,8.9);
+          // interior furniture
+          const fab=M(0xcfc6b4,1),rug=M(0x8c6e55,1);
+          B(4,.02,3,rug,-3,.5,1.4);B(3.4,.5,1.2,fab,-3,.75,.4);B(3.4,.6,.25,fab,-3,1.2,-.15);B(1.4,.3,.7,wood,-3,.65,1.8);
+          B(2.8,.08,1.2,wood,3.5,1.15,.5);for(const x of [2.3,4.7])for(const z of [0,1])B(.1,.7,.1,dark,x,.8,z);
+          for(const x of [2.8,4.2])for(const z of [-.4,1.4])B(.5,.1,.5,M(0x5a4a3c),x,.85,z);
+          B(2,1.2,.05,M(0x6f8f6a),-3,2.3,-4.3);
+          const bulbs=[[-3,2.9,1],[3.5,2.9,.5]];bulbs.forEach(([x,y,z])=>{const s=new THREE.Mesh(new THREE.SphereGeometry(.2,12,10),lampMat);s.position.set(x,y,z);scene.add(s)});
+          // veranda furniture
+          B(3.2,.45,1.05,fab,-3.5,.72,7.4);B(3.2,.5,.2,fab,-3.5,1.1,6.9);B(1.4,.3,.8,wood,-3.5,.62,8.4);
+          B(2.7,.1,1.2,wood,4.3,1.1,7.6);for(const x of [3.1,5.5])for(const z of [7,8.2])B(.1,.7,.1,dark,x,.8,z);
+          // sconces + lanterns
+          const sc=[[-6,2.4,5.3],[5.6,2.4,5.3],[-8.9,2.4,5],[8.9,2.4,5]];sc.forEach(([x,y,z])=>B(.18,.45,.12,lampMat,x,y,z));
+          const lan=[];for(let i=0;i<8;i++){const x=i%2?1.6:-1.6,z=11.5+i*2.4;Cy(.08,.1,.5,dark,x,.65,z);B(.2,.28,.2,lampMat,x,.98,z);B(1.5,.1,.8,stone,(i%2?.2:-.2),.05,z-1.2)}
+          // point lights for interior and veranda
+          const inL=[[-3,3,1,0xffc27a],[3.5,3,.5,0xffc27a],[0,3.2,-2,0xffd09a]].map(([x,y,z,c])=>{const l=new THREE.PointLight(c,0,13);l.position.set(x,y,z);scene.add(l);return l});
+          const outL=[[-5,3.2,8.5],[4,3.2,8.5],[0,2,11]].map(([x,y,z])=>{const l=new THREE.PointLight(0xffbd76,0,10);l.position.set(x,y,z);scene.add(l);return l});
+          // planting
+          const lf=[M(0x2f5f3e,.9),M(0x477a4a,.9),M(0x3b6b36,.9)],trunk=M(0xffffff,.9);trunk.map=tx((g,w)=>{const s=w/256;g.fillStyle='#6a5640';g.fillRect(0,0,w,w);for(let y=0;y<w;y+=14*s){g.fillStyle='#3a2e21';g.fillRect(0,y,w,3.5*s);g.fillStyle='rgba(255,255,255,.07)';g.fillRect(0,y+4*s,w,2*s)}for(let i=0;i<500*s;i++){g.fillStyle='rgba(30,20,10,.15)';g.fillRect(rnd(0,w),rnd(0,w),1,rnd(3,10)*s)}},1,5,2);trunk.normalMap=trunk.map.nm;
+          function shrub(x,z,s){const g=new THREE.Mesh(new THREE.SphereGeometry(.8,10,8),lf[(Math.random()*3)|0]);g.scale.set(s,.7*s,s);g.position.set(x,.3*s,z);g.castShadow=g.receiveShadow=true;scene.add(g)}
+          for(let i=0;i<30;i++)shrub((Math.random()<.5?-1:1)*rnd(10,18),rnd(-6,26),rnd(.6,1.4));
+          for(let i=0;i<14;i++)shrub(rnd(-9,9),rnd(14,22)*(Math.random()<.5?1:1)+ (i%2?-6:0),.5);
+          const fl=[M(0xd04030),M(0xe5bd59),M(0xe8d9c2)];for(let i=0;i<50;i++){const f=new THREE.Mesh(new THREE.SphereGeometry(.14,8,6),fl[i%3]);f.position.set(rnd(-14,14),.35,rnd(11,24));f.scale.y=.6;scene.add(f)}
+          for(let i=0;i<14;i++){const b=new THREE.Mesh(new THREE.DodecahedronGeometry(rnd(.35,.7),0),stone);b.position.set((i%2?1:-1)*rnd(7,12),.15,rnd(10,30));b.scale.set(1.3,.6,1);b.castShadow=true;scene.add(b)}
+          const palms=[];
+          function palm(x,z,h,lean){const g=new THREE.Group();g.position.set(x,0,z);let px=0;
+          for(let i=0;i<6;i++){const s=h/6;px+=Math.sin(lean)*s*.35;Cy(.3-i*.025,.34-i*.025,s,trunk,px,s*(i+.5),0,g)}
+          const crown=new THREE.Group();crown.position.set(px,h,0);g.add(crown);
+          for(let i=0;i<14;i++){const L=rnd(.9,1.2),fr=new THREE.Group();fr.rotation.y=i/14*Math.PI*2+rnd(-.1,.1);fr.rotation.z=rnd(.25,.6);crown.add(fr);let par=fr;
+          for(let s=0;s<4;s++){const seg=new THREE.Group();seg.position.x=s?1.05*L:0;seg.rotation.z=-.3-s*.12;par.add(seg);const m=new THREE.Mesh(new THREE.SphereGeometry(1,8,4),lf[(i+s)%3]);m.scale.set(.6*L,.035,.42-s*.06);m.position.x=.6*L;m.castShadow=true;seg.add(m);par=seg}}
+          scene.add(g);palms.push(g)}
+          [[-14,10,9,.3],[-12,24,8,-.2],[-18,-3,8,.2],[14,6,9,-.3],[18,22,7,.2],[22,-2,10,-.1],[-9,-8,8,.1]].forEach(a=>palm(...a));
+          for(let i=0;i<10;i++){const x=rnd(26,60),z=rnd(-30,25),h=rnd(5,9);Cy(.3,.45,h*.55,trunk,x,h*.275,z);const c=new THREE.Mesh(new THREE.SphereGeometry(h*.32,14,10),lf[i%3]);c.position.set(x,h*.72,z);c.castShadow=true;scene.add(c)}
+          // ---------- clouds ----------
+          const cc=document.createElement('canvas');cc.width=cc.height=128;{const g=cc.getContext('2d'),r=g.createRadialGradient(64,64,4,64,64,62);r.addColorStop(0,'rgba(255,255,255,.95)');r.addColorStop(.5,'rgba(255,255,255,.5)');r.addColorStop(1,'rgba(255,255,255,0)');g.fillStyle=r;g.fillRect(0,0,128,128)}
+          const ctex=new THREE.CanvasTexture(cc),cloudG=new THREE.Group(),NC=40,cloudS=[];scene.add(cloudG);
+          for(let i=0;i<NC;i++){const s=new THREE.Sprite(new THREE.SpriteMaterial({map:ctex,transparent:true,depthWrite:false,fog:false}));const a=Math.random()*Math.PI*2,r=rnd(120,260);
+          s.position.set(Math.cos(a)*r,rnd(45,95),Math.sin(a)*r);s.scale.set(rnd(50,95),rnd(22,38),1);cloudG.add(s);cloudS.push(s)}
+          // ---------- glow halos + planters ----------
+          const halos=[];{const mk=(x,y,z,s)=>{const h=new THREE.Sprite(new THREE.SpriteMaterial({map:ctex,color:0xffa94d,transparent:true,blending:THREE.AdditiveBlending,depthWrite:false,opacity:0}));h.position.set(x,y,z);h.scale.setScalar(s);scene.add(h);halos.push(h)};
+          sc.forEach(([x,y,z])=>mk(x,y,z,1.8));bulbs.forEach(([x,y,z])=>mk(x,y,z,1.6));for(let i=0;i<8;i++)mk(i%2?1.6:-1.6,.98,11.5+i*2.4,1.1)}
+          for(const[x,z]of[[-6,6],[5.6,6],[-1,6.2],[8.6,6.5],[-8.2,6.5]]){Cy(.4,.3,.7,M(0xe8e4da,.5),x,.75,z);for(let i=0;i<9;i++){const c=new THREE.Mesh(new THREE.ConeGeometry(.12,1.3,5),lf[i%3]);c.position.set(x+Math.cos(i)*.2,1.5,z+Math.sin(i)*.2);c.rotation.set(Math.sin(i*2)*.5,0,Math.cos(i*2)*.5);c.castShadow=true;scene.add(c)}}
+          // ---------- rain ----------
+          const RN=1400,rp=new Float32Array(RN*6);for(let i=0;i<RN;i++){const x=rnd(-35,35),y=rnd(0,30),z=rnd(-20,40);rp.set([x,y,z,x+.15,y-.9,z],i*6)}
+          const rg=new THREE.BufferGeometry();rg.setAttribute('position',new THREE.BufferAttribute(rp,3));
+          const rain=new THREE.LineSegments(rg,new THREE.LineBasicMaterial({color:0xcfe3ee,transparent:true,opacity:.5,fog:false}));rain.frustumCulled=false;scene.add(rain);
+          // ---------- state / data bridge ----------
+          const P={clear:{c:.04,r:0,f:0,w:.25},partly:{c:.45,r:0,f:0,w:.4},cloudy:{c:.88,r:0,f:0,w:.5},rain:{c:.92,r:.6,f:.25,w:.6},storm:{c:1,r:1,f:.3,w:1},fog:{c:.6,r:0,f:1,w:.1}};
+          const N={clear:'Clear',partly:'Partly cloudy',cloudy:'Overcast',rain:'Rain',storm:'Thunderstorm',fog:'Coastal mist'};
+          const S={hour:17.5,weather:'clear',cloud:null,rain:null,wind:null,lux:null,live:false};
+          const Cur={c:.04,r:0,f:0,w:.25,dl:.5,h:17.5};let flash=0;
+          function normW(s){s=String(s).toLowerCase();if(P[s])return s;if(/thunder|storm|lightning/.test(s))return'storm';if(/rain|shower|drizzle/.test(s))return'rain';if(/fog|mist|haze/.test(s))return'fog';if(/part|few|scatter|broken/.test(s))return'partly';if(/over|cloud/.test(s))return'cloudy';return'clear'}
+          function parseT(t){if(typeof t==='number')return t>1e9?hrOf(new Date(t>1e12?t:t*1e3)):t%24;if(/^\d{1,2}:\d{2}/.test(t)){const[a,b]=t.split(':');return+a+parseInt(b)/60}const d=new Date(t);return isNaN(d)?S.hour:hrOf(d)}
+          const hrOf=d=>d.getHours()+d.getMinutes()/60;
+          const LuxScene={update(d={}){
+           if(d.time!=null){S.hour=parseT(d.time);S.live=false}
+           const w=d.weather||d.condition;if(w)S.weather=normW(w);
+           const pc=d.cloudCover??d.clouds;if(pc!=null)S.cloud=clamp(pc/100,0,1);
+           const pr=d.rain??(d.precipitation!=null?d.precipitation/8:null);if(pr!=null)S.rain=clamp(pr,0,1);
+           if(d.wind!=null)S.wind=clamp(d.wind/12,0,1);
+           if('lux'in d)S.lux=d.lux==null?null:Math.max(0,+d.lux);
+           if(d.live!=null)S.live=!!d.live;sync()},get:()=>({...S})};
+          window.LuxScene=LuxScene;document.addEventListener('message',e=>{try{LuxScene.update(typeof e.data==='string'?JSON.parse(e.data):e.data)}catch(_){}});
+          addEventListener('message',e=>{try{const d=typeof e.data==='string'?JSON.parse(e.data):e.data;if(d&&typeof d==='object')LuxScene.update(d)}catch(_){}});
+          function sync(){const h=S.live?hrOf(new Date()):S.hour;$('#time').value=h;$('#wx').value=S.weather;$('#live').checked=S.live;$('#uselux').checked=S.lux!=null;
+           if(S.lux!=null)$('#lux').value=Math.log10(S.lux+1);
+           const hh=Math.floor(h),mm=Math.floor((h-hh)*60),ts=String(hh).padStart(2,'0')+':'+String(mm).padStart(2,'0');$('#tl').textContent=ts;
+           $('#ll').textContent=S.lux!=null?Math.round(S.lux).toLocaleString()+' lx':'—';$('#hud').textContent=ts+' · '+N[S.weather]+(S.lux!=null?' · '+Math.round(S.lux).toLocaleString()+' lx':'')}
+          $('#time').oninput=e=>LuxScene.update({time:+e.target.value});$('#wx').onchange=e=>{S.cloud=S.rain=S.wind=null;LuxScene.update({weather:e.target.value})};
+          $('#lux').oninput=e=>{LuxScene.update({lux:Math.pow(10,+e.target.value)-1})};
+          $('#uselux').onchange=e=>LuxScene.update({lux:e.target.checked?Math.pow(10,+$('#lux').value)-1:null});
+          $('#live').onchange=e=>LuxScene.update({live:e.target.checked});
+          {const q=new URLSearchParams(location.search),o={};for(const[k,v]of q)if(k!=='ui')o[k]=isNaN(v)||k==='time'?v:+v;if(q.get('ui')==='0'){$('#panel').style.display='none';$('#hud').style.display='none'}if(q.get('touch')==='0')R.domElement.style.pointerEvents='none';
+           if(q.get('live')==='1'){o.live=true;delete o.time}LuxScene.update(o)}
+          // ---------- environment ----------
+          const nT=C3(.02,.03,.09),nH=C3(.07,.09,.18),dT=C3(.22,.48,.85),dH=C3(.66,.82,.94),OR=C3(1,.55,.28);
+          let T0=0;
+          function env(dt,t){
+           if(S.live){S.hour=hrOf(new Date());}
+           const p=P[S.weather],T={c:S.cloud??p.c,r:S.rain??p.r,f:p.f,w:S.wind??p.w};
+           const k0=1-Math.exp(-dt*2.2);for(const k in T)Cur[k]+=(T[k]-Cur[k])*k0;
+           Cur.h=(Cur.h+((((S.hour-Cur.h)+36)%24)-12)*(1-Math.exp(-dt*3))+24)%24;
+           const ang=(Cur.h-6)/12*Math.PI,e=Math.sin(ang),dlT=ss(-.08,.3,e);
+           const dlL=S.lux!=null?clamp(Math.log10(S.lux+1)/4.6,0,1):null;
+           Cur.dl+=((dlL==null?dlT:lerp(dlT,dlL,.6))-Cur.dl)*k0;
+           const c=Cur.c,r=Cur.r,f=Cur.f,dl=Cur.dl,kd=ss(-.15,.35,e),tw=Math.max(0,1-Math.abs(e-.04)/.28);
+           let top=nT.clone().lerp(dT,kd),hor=nH.clone().lerp(dH,kd).lerp(OR,tw*.8*(1-c*.4));
+           const grey=C3(.52,.56,.6).multiplyScalar((.12+.88*kd)*(1-.35*r));
+           top.lerp(grey,c*.85);hor.lerp(grey.clone().multiplyScalar(1.12),c*.7);hor.lerp(C3(.72,.76,.78).multiplyScalar(.2+.8*kd),f*.8);
+           if(flash>0){hor.lerp(C3(1,1,1),flash*.6);top.lerp(C3(1,1,1),flash*.35)}
+           const u=sky.material.uniforms;u.top.value.copy(lin(top));u.hor.value.copy(lin(hor));
+           scene.fog.color.copy(lin(hor));scene.fog.near=lerp(70,6,f);scene.fog.far=lerp(190,60,Math.max(f,r*.5));
+           const sd=new THREE.Vector3(Math.cos(ang),e,lerp(-.12,.45,ss(.15,.6,e))).normalize();sun.position.copy(sd).multiplyScalar(90);sun.target.position.set(0,0,0);
+           const scol=C3(1,.62,.35).lerp(C3(1,.96,.88),ss(0,.5,e));sun.color.copy(lin(scol));sun.intensity=3.2*dl*(1-.82*c)*(e>-.02?1:0);
+           u.sd.value.copy(sd);u.sc.value.copy(lin(scol)).multiplyScalar((1-.9*c)*ss(-.12,.1,e));
+           const night=1-ss(-.1,.25,e);moon.position.set(-sd.x*60,Math.abs(sd.y)*50+15,-sd.z*60);u.md.value.set(-sd.x,Math.max(.3,-sd.y),-sd.z).normalize();
+           moon.intensity=night*.55*(1-c*.6);u.st.value=(1-ss(-.12,.1,e))*(1-c)*(1-f*.8);
+           hemi.color.copy(lin(top.clone().lerp(hor,.5)));hemi.intensity=.1+.45*dl*(1-.35*c)+flash*1.2;R.toneMappingExposure=1.05;
+           const inter=1-ss(.2,.55,dl*(1-.3*c));
+           lampMat.emissiveIntensity=inter*1.4;halos.forEach(h=>h.material.opacity=inter*.85);intMat.emissiveIntensity=inter*.9;inL.forEach((l,i)=>l.intensity=clamp(inter*1.3-i*.25,0,1)*1.5);outL.forEach(l=>l.intensity=inter*1.1);
+           glass.opacity=lerp(.34,.12,inter);
+           grass.roughness=lerp(.95,.55,r);grass.color.setScalar(1-.22*r);deckM.roughness=lerp(.65,.25,r);stone.roughness=lerp(.95,.6,r);
+           bladeU.uTime.value=t;bladeU.uWind.value=Cur.w;wn.nm.offset.set(t*.01,t*.006);foam.material.color.setScalar(.12+.88*kd);foam.position.x=-31+Math.sin(t*.7)*.8;foam.material.opacity=.35+.25*Math.sin(t*.7+1);
+           const n=Math.round(c*NC);const cb=C3(1,1,1).lerp(OR,tw*.65).multiplyScalar(.1+.9*kd).lerp(grey,c*.55);const cl=lin(cb);
+           cloudS.forEach((s,i)=>{s.visible=i<n;s.material.color.copy(cl);s.material.opacity=.5+.4*c});cloudG.rotation.y+=dt*.004*(1+Cur.w*3);
+           water.material.color.copy(lin(C3(.12,.42,.52).multiplyScalar(.12+.88*kd).lerp(grey,c*.4)));water.material.roughness=lerp(.2,.42,Cur.w);
+           const pa=water.geometry.attributes.position,wa=.12+.5*Cur.w;for(let i=0;i<pa.count;i++){const x=pa.getX(i),y=pa.getY(i);pa.setZ(i,(Math.sin(x*.12+t*.9)+Math.sin(y*.2+t*1.2+x*.05))*wa)}pa.needsUpdate=true;water.geometry.computeVertexNormals();
+           palms.forEach((g,i)=>{g.rotation.z=Math.sin(t*1.3+i)*.012*(1+Cur.w*5);g.rotation.x=Math.cos(t*.9+i)*.008*(1+Cur.w*4)});
+           rip.forEach(m=>{const d=m.userData;d.p+=dt*1.6;if(d.p>1){d.p=0;d.x=rnd(-13,13);d.z=d.deck?rnd(4.8,9):rnd(10.5,30)}m.position.set(d.x,d.deck?.42:.05,d.z);m.scale.setScalar(.05+d.p*.5);m.material.opacity=(1-d.p)*.45*r*(r>.1?1:0)});
+           rain.visible=r>.03;rain.material.opacity=.15+.45*r;
+           if(rain.visible){const a=rg.attributes.position.array,sp=(18+14*r)*dt;for(let i=0;i<RN;i++){const j=i*6;a[j+1]-=sp;a[j+4]-=sp;a[j]+=Cur.w*3*dt;a[j+3]+=Cur.w*3*dt;if(a[j+1]<0){const x=rnd(-35,35),z=rnd(-20,40);a.set([x,30,z,x+.15,29.1,z],j)}}rg.attributes.position.needsUpdate=true}
+           if(r>.8&&c>.9&&Math.random()<dt*.12)flash=1;flash=Math.max(0,flash-dt*(2+Math.random()*3));flashL.intensity=flash*5;updEnv(t);
+           if(comp&&Q!=='low'){const u2=fin.uniforms,cd=cam.getWorldDirection(new THREE.Vector3()).dot(sd),w=sd.clone().multiplyScalar(300).add(cam.position).project(cam);
+            u2.uSun.value.set(w.x*.5+.5,w.y*.5+.5);u2.uRay.value=ss(0,.5,cd)*ss(-.05,.12,e)*(1-c*.9)*(1-f*.7);u2.uTime.value=t%100;u2.uSat.value=1-.28*c;bloom.strength=.2+.5*inter}
+          }
+          // ---------- ripples + post-processing ----------
+          const rip=[];for(let i=0;i<70;i++){const m=new THREE.Mesh(new THREE.RingGeometry(.8,1,20),new THREE.MeshBasicMaterial({color:0xdfeaf0,transparent:true,opacity:0,depthWrite:false,side:THREE.DoubleSide}));m.rotation.x=-Math.PI/2;const dk=i%3===0;m.userData={p:Math.random(),x:rnd(-13,13),z:dk?rnd(4.8,9):rnd(10.5,30),deck:dk};scene.add(m);rip.push(m)}
+          let comp,bloom,fin,Q=innerWidth<700?'med':'high';
+          const finShader={uniforms:{tDiffuse:{value:null},uSun:{value:new THREE.Vector2(.5,.5)},uRay:{value:0},uTime:{value:0},uGrain:{value:.035},uVig:{value:.55},uExp:{value:1.15},uAsp:{value:1},uSat:{value:1}},
+          vertexShader:'varying vec2 vUv;void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}',
+          fragmentShader:`uniform sampler2D tDiffuse;uniform vec2 uSun;uniform float uRay,uTime,uGrain,uVig,uExp,uAsp,uSat;varying vec2 vUv;
+          float hs(vec2 p){return fract(sin(dot(p,vec2(12.9898,78.233)))*43758.5453);}
+          vec3 aces(vec3 x){x*=uExp;return clamp((x*(2.51*x+.03))/(x*(2.43*x+.59)+.14),0.,1.);}
+          void main(){vec3 c=texture2D(tDiffuse,vUv).rgb;
+          if(uRay>.001){vec2 d=(uSun-vUv)/40.;vec2 p=vUv;float w=1.;vec3 s=vec3(0.);for(int i=0;i<40;i++){p+=d;vec3 t=texture2D(tDiffuse,p).rgb;float l=dot(t,vec3(.3,.59,.11));s+=t*smoothstep(.7,2.,l)*w;w*=.955;}c+=s*uRay*.05*vec3(1.,.82,.6);}
+          vec2 q=vUv-.5;q.x*=uAsp;c*=1.-uVig*dot(q,q)*1.6;c=aces(c);
+          c=mix(vec3(dot(c,vec3(.299,.587,.114))),c,uSat);c=pow(c,vec3(.4545));c+=(hs(vUv*vec2(1920.,1080.)+uTime)-.5)*uGrain;gl_FragColor=vec4(c,1.);}`};
+          function rs(){cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix();R.setSize(innerWidth,innerHeight);if(comp){comp.setPixelRatio(R.getPixelRatio());comp.setSize(innerWidth,innerHeight);fin.uniforms.uAsp.value=innerWidth/innerHeight}}
+          function setQ(q){Q=q;{const tw=q==='low'?256:q==='med'?512:1024;if(tw!==TW){TW=tw;TXR.forEach(paint)}}if(q==='low'){R.toneMapping=THREE.ACESFilmicToneMapping;R.setPixelRatio(1)}else{R.toneMapping=THREE.NoToneMapping;R.setPixelRatio(q==='med'?1.25:Math.min(devicePixelRatio,1.75));
+           if(!comp){const rt=new THREE.WebGLRenderTarget(innerWidth,innerHeight,{type:THREE.HalfFloatType,samples:4});comp=new THREE.EffectComposer(R,rt);comp.addPass(new THREE.RenderPass(scene,cam));bloom=new THREE.UnrealBloomPass(new THREE.Vector2(innerWidth,innerHeight),.3,.6,.9);comp.addPass(bloom);fin=new THREE.ShaderPass(finShader);comp.addPass(fin)}}
+           rs();$('#qs').value=q}
+          $('#qs').onchange=e=>setQ(e.target.value);setQ(new URLSearchParams(location.search).get('q')||Q);
+          // ---------- loop ----------
+          const clk=new THREE.Clock();let sy=0;
+          function loop(){requestAnimationFrame(loop);const dt=Math.min(clk.getDelta(),.05),t=clk.elapsedTime;env(dt,t);
+           const a=ctl.getAzimuthalAngle();if(a>.7)ctl.autoRotateSpeed=-Math.abs(ctl.autoRotateSpeed);if(a<-.5)ctl.autoRotateSpeed=Math.abs(ctl.autoRotateSpeed);
+           if(S.live&&(sy+=dt)>5){sy=0;sync()}ctl.update();Q==='low'?R.render(scene,cam):comp.render(dt)}
+          sync();$('#load').style.display='none';loop();
+          {const m=JSON.stringify({type:'ready',api:'LuxScene.update'});try{window.ReactNativeWebView&&window.ReactNativeWebView.postMessage(m)}catch(_){}try{parent!==window&&parent.postMessage(m,'*')}catch(_){}try{window.webkit.messageHandlers.luxscene.postMessage(m)}catch(_){}try{window.LuxBridge&&window.LuxBridge.postMessage(m)}catch(_){}}
+          addEventListener('resize',rs);
+          </script></body></html>
           EOF
           cat > app/src/main/java/com/lux/monitor/Appliances.kt <<'EOF'
           package com.lux.monitor
@@ -2124,8 +2396,9 @@ jobs:
           package com.lux.monitor
 
           import android.content.SharedPreferences
-          import android.graphics.BitmapFactory
           import android.graphics.PathMeasure
+          import android.webkit.WebView
+          import android.webkit.WebViewClient
           import androidx.compose.foundation.Canvas
           import androidx.compose.foundation.background
           import androidx.compose.foundation.border
@@ -2136,9 +2409,7 @@ jobs:
           import androidx.compose.ui.Alignment
           import androidx.compose.ui.Modifier
           import androidx.compose.ui.draw.clip
-          import androidx.compose.ui.geometry.CornerRadius
           import androidx.compose.ui.geometry.Offset
-          import androidx.compose.ui.geometry.Size
           import androidx.compose.ui.graphics.*
           import androidx.compose.ui.graphics.drawscope.DrawScope
           import androidx.compose.ui.graphics.drawscope.Stroke
@@ -2146,13 +2417,9 @@ jobs:
           import androidx.compose.ui.text.font.FontWeight
           import androidx.compose.ui.text.rememberTextMeasurer
           import androidx.compose.ui.unit.Dp
-          import androidx.compose.ui.unit.IntOffset
-          import androidx.compose.ui.unit.IntSize
           import androidx.compose.ui.unit.dp
           import androidx.compose.ui.unit.sp
-          import java.time.LocalDate
-          import java.time.LocalTime
-          import kotlin.math.abs
+          import androidx.compose.ui.viewinterop.AndroidView
           import kotlin.math.sin
 
           /** Latest current weather from Open-Meteo (filled by fetchForecast). */
@@ -2165,30 +2432,24 @@ jobs:
             if(SceneCfg.on) SkyScene(x,rt) else Hero(x,rt)
           }
 
-          private fun riseSet(sp:SharedPreferences):Pair<Int,Int>{
-            val lat=sp.getString("lat","")!!.toDoubleOrNull(); val lon=sp.getString("lon","")!!.toDoubleOrNull()
-            return (if(lat!=null&&lon!=null) sunTimes(lat,lon,LocalDate.now()) else null) ?: Pair(390,1110)
+          /** Maps Open-Meteo weather codes to the weather names the villa page understands. */
+          private fun weatherKey(code:Int):String = when{
+            code>=95 -> "storm"
+            code in 51..67 || code in 80..82 -> "rain"
+            code==45 || code==48 -> "fog"
+            code in 1..3 -> "partly"
+            code==0 -> "clear"
+            else -> "cloudy"
           }
 
-          private fun wxText(w:WxData?,day:Float):String{
-            if(w==null) return "Add location"
-            return when{
-              w.code==0 -> if(day<0.5f) "Clear night" else "Clear"
-              w.code in 1..3 -> "Partly cloudy"
-              w.code==45||w.code==48 -> "Fog"
-              w.code in 51..67||w.code in 80..82 -> "Rain"
-              w.code in 71..77||w.code in 85..86 -> "Snow"
-              w.code>=95 -> "Thunderstorm"
-              else -> "Cloudy"
-            }
-          }
-
-          /** Soft cloud from overlapping blobs, in 360-wide design units. */
-          private fun DrawScope.drawCloud(cx:Float,cy:Float,s:Float,k:Float,col:Color,a:Float){
-            drawRoundRect(color=col,topLeft=Offset((cx-38f*s)*k,(cy-6f*s)*k),size=Size(76f*s*k,22f*s*k),cornerRadius=CornerRadius(11f*s*k),alpha=a)
-            drawCircle(color=col,radius=15f*s*k,center=Offset((cx-14f*s)*k,(cy-6f*s)*k),alpha=a)
-            drawCircle(color=col,radius=20f*s*k,center=Offset((cx+6f*s)*k,(cy-10f*s)*k),alpha=a)
-            drawCircle(color=col,radius=13f*s*k,center=Offset((cx+26f*s)*k,(cy-4f*s)*k),alpha=a)
+          private fun wxLabel(code:Int):String = when{
+            code==0 -> "Clear"
+            code in 1..3 -> "Partly cloudy"
+            code==45 || code==48 -> "Fog"
+            code in 51..67 || code in 80..82 -> "Rain"
+            code in 71..77 || code in 85..86 -> "Snow"
+            code>=95 -> "Thunderstorm"
+            else -> "Cloudy"
           }
 
           /** Quadratic curve in 360-wide design units, scaled by k to pixels. */
@@ -2246,28 +2507,37 @@ jobs:
             }
           }
 
-          /** Compact sky scene: photo, weather, glass cards for solar (per string), grid (V and Hz), load and battery, glowing hub and curved power flows. */
+          /** Sky scene: the 3D villa (WebView, bundled in assets/villa) with live weather, under glass cards, glowing hub and animated power flows. */
           @Composable fun SkyScene(x:Lux,rt:String){
             val ctx=LocalContext.current
             val sp=ctx.getSharedPreferences("c",0)
             val tm=rememberTextMeasurer()
-            val photo=remember{ BitmapFactory.decodeResource(ctx.resources,R.drawable.house_photo).asImageBitmap() }
+            var loaded by remember{ mutableStateOf(false) }
             var tSec by remember{ mutableStateOf(0f) }
             LaunchedEffect(Unit){
               var last=0L
               while(true){ withFrameNanos{ n -> if(last!=0L) tSec+=(n-last)/1e9f; last=n } }
             }
-            val now=LocalTime.now(); val m=now.hour*60+now.minute
-            val (rise,set)=riseSet(sp)
-            val dawnT=((m-(rise-40)).toFloat()/80f).coerceIn(0f,1f)
-            val duskT=(((set+40)-m).toFloat()/80f).coerceIn(0f,1f)
-            val day=minOf(dawnT,duskT)
-            val warm=(1f-minOf(abs(m-set),abs(m-rise)).toFloat()/60f).coerceIn(0f,1f)
+
+            val q=sp.getString("villaQ","med")!!
+            val web=remember{
+              WebView(ctx).apply{
+                setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                settings.javaScriptEnabled=true
+                settings.domStorageEnabled=true
+                webViewClient=object:WebViewClient(){
+                  override fun onPageFinished(view:WebView?,url:String?){ loaded=true }
+                }
+                // ui=0 hides the built-in panel, touch=0 lets the Android page scroll
+                loadUrl("file:///android_asset/villa/index.html?q=$q&ui=0&touch=0")
+              }
+            }
+            DisposableEffect(Unit){ onDispose{ web.destroy() } }
 
             val w=WxState.data; val code=w?.code?:0; val cloud=w?.cloud?:10
-            val rainy=code in 51..67||code in 80..82||code>=95
-            val snowy=code in 71..77||code in 85..86
-            val clock="%02d:%02d".format(now.hour,now.minute)
+            LaunchedEffect(loaded,code,cloud){
+              if(loaded) web.evaluateJavascript("LuxScene.update({live:true,weather:\"${weatherKey(code)}\",cloudCover:$cloud})",null)
+            }
 
             val cap=sp.getString("c","15.36")!!
             val solarPct=(x.pv*100/11500).coerceIn(0,100)
@@ -2278,50 +2548,11 @@ jobs:
             val chgA=if(x.vBat>0.0) (x.charge-x.discharge)/x.vBat else 0.0
             val gridCol=Color(0xFFE5E7EB)
             val loadCol=Color(0xFF38BDF8)
-            val vCol=when{ x.vGrid<80.0 -> RED; x.vGrid in 207.0..253.0 -> GREEN; else -> AMBER }
 
             Box(Modifier.fillMaxWidth().aspectRatio(360f/250f)){
+              AndroidView(factory={web},modifier=Modifier.matchParentSize())
               Canvas(Modifier.matchParentSize()){
                 val k=size.width/360f
-                // Photo cropped to the scene aspect, centred on the house
-                val bw=photo.width; val bh=photo.height
-                val srcW=minOf(bw,(bh*360f/250f).toInt())
-                val srcX=((bw*0.62f)-srcW/2f).toInt().coerceIn(0,bw-srcW)
-                drawImage(image=photo,srcOffset=IntOffset(srcX,0),srcSize=IntSize(srcW,bh),dstSize=IntSize(size.width.toInt(),size.height.toInt()))
-                // Time of day and weather tint
-                drawRect(Color(0xFF050A18),alpha=(1f-day)*0.35f)
-                drawRect(Brush.verticalGradient(listOf(Color.Transparent,Color(0xFFFF7A3D)),size.height*0.25f,size.height*0.8f),alpha=warm*0.35f)
-                val greyA=if(rainy||snowy||cloud>70) 0.35f else if(cloud>40) 0.12f else 0f
-                drawRect(Color(0xFF8A9BB0),alpha=greyA)
-                // Stars at night, upper sky only
-                val starA=(1f-day)*(if(cloud>60) 0.2f else 0.5f)
-                if(starA>0.02f){
-                  val rnd=java.util.Random(11)
-                  repeat(40){
-                    val sx=rnd.nextFloat()*360f; val sy=rnd.nextFloat()*60f; val ph=rnd.nextFloat()*6.28f
-                    drawCircle(Color.White,radius=(0.6f+rnd.nextFloat()*0.8f)*k,center=Offset(sx*k,sy*k),alpha=starA*(0.55f+0.45f*sin(tSec*1.3f+ph)))
-                  }
-                }
-                // Drifting clouds, density from live cloud cover
-                val nClouds=(when{ cloud<15->0; cloud<40->2; cloud<70->4; else->6 })+(if(rainy) 2 else 0)
-                val cCol=lerp(Color(0xFFE8EEF7),Color(0xFF8E9BB3),1f-day)
-                repeat(nClouds){ i->
-                  val speed=3f+(i%3)*2f
-                  val cx=((((i*97+40)%400)+tSec*speed)%420f)-30f
-                  val cy=12f+((i*29)%26).toFloat()
-                  drawCloud(cx,cy,0.8f+(i%3)*0.2f,k,cCol,0.10f+0.30f*(cloud/100f))
-                }
-                // Rain, snow and storm flash
-                if(rainy){ repeat(36){ i->
-                  val x0=((i*53)%360).toFloat(); val y0=((((i*41)%220).toFloat()+tSec*140f)%220f)+30f
-                  if(y0<250f) drawLine(color=Color(0xFF9ED8FF),start=Offset(x0*k,y0*k),end=Offset((x0-5f)*k,(y0+12f)*k),strokeWidth=1.2f*k,cap=StrokeCap.Round,alpha=0.4f)
-                } }
-                if(snowy){ repeat(30){ i->
-                  val x0=((i*61)%360).toFloat(); val y0=((((i*43)%220).toFloat()+tSec*120f)%220f)+30f
-                  if(y0<250f) drawCircle(Color.White,radius=1.8f*k,center=Offset(x0*k,y0*k),alpha=0.7f)
-                } }
-                if(code>=95&&(tSec%5f)>4.8f) drawRect(Color.White,alpha=0.12f)
-
                 // Power flows (design units: hub centre 180,108 radius 26)
                 flowLine(quad(140f,45f,158f,48f,162f,90f,k),AMBER,x.pv>20,x.pv.toDouble(),tSec,k)
                 if(x.gridOut>20) flowLine(quad(162f,126f,156f,140f,140f,143f,k),gridCol,true,x.gridOut.toDouble(),tSec,k)
@@ -2338,9 +2569,8 @@ jobs:
                 drawCircle(GREEN,radius=26f*k,center=hub,style=Stroke(2.2f*k),alpha=0.9f)
                 icon(I_HOME,Color.White,hub,28f*k,false)
 
-                // Weather and time, top right
-                label(tm,wxText(w,day),236f*k,12f*k,11f*k,Color.White,bold=true)
-                label(tm,clock,236f*k,27f*k,10f*k,Color(0xFF9AA8BA),mono=true)
+                // Weather, top right
+                label(tm,wxLabel(code),236f*k,12f*k,11f*k,Color.White,bold=true)
               }
               BoxWithConstraints(Modifier.matchParentSize()){
                 val k=maxWidth/360f
@@ -2643,7 +2873,6 @@ jobs:
             echo "Missing assets/fixed.keystore or assets/house_photo.webp in the repo root"; exit 1; fi
           cp "$GITHUB_WORKSPACE/assets/fixed.keystore" app/fixed.keystore
           cp "$GITHUB_WORKSPACE/assets/house_photo.webp" app/src/main/res/drawable/house_photo.webp
-
       - name: Build debug APK
         working-directory: proj
         run: gradle assembleDebug --no-daemon
