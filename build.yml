@@ -2657,6 +2657,12 @@ jobs:
           rootProject.name="LuxMonitor"
           include(":app")
           EOF
+          # Binary assets live in the repo under assets/ and are copied into the generated project
+          if [ ! -f "$GITHUB_WORKSPACE/assets/fixed.keystore" ] || [ ! -f "$GITHUB_WORKSPACE/assets/house_photo.webp" ]; then
+            echo "Missing assets/fixed.keystore or assets/house_photo.webp in the repo root"; exit 1; fi
+          cp "$GITHUB_WORKSPACE/assets/fixed.keystore" app/fixed.keystore
+          cp "$GITHUB_WORKSPACE/assets/house_photo.webp" app/src/main/res/drawable/house_photo.webp
+
       - name: Build debug APK
         working-directory: proj
         run: gradle assembleDebug --no-daemon
