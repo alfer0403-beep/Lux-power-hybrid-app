@@ -2414,8 +2414,10 @@ jobs:
           import androidx.compose.ui.graphics.drawscope.DrawScope
           import androidx.compose.ui.graphics.drawscope.Stroke
           import androidx.compose.ui.platform.LocalContext
+          import androidx.compose.ui.text.TextStyle
           import androidx.compose.ui.text.font.FontWeight
           import androidx.compose.ui.text.rememberTextMeasurer
+          import androidx.compose.ui.graphics.Shadow
           import androidx.compose.ui.unit.Dp
           import androidx.compose.ui.unit.dp
           import androidx.compose.ui.unit.sp
@@ -2452,21 +2454,24 @@ jobs:
             else -> "Cloudy"
           }
 
+          /** Villa page background colour, used so the cards fade into the scene. */
+          private val SceneBg = Color(0xFF0D161B)
+
           /** Quadratic curve in 360-wide design units, scaled by k to pixels. */
           private fun quad(x0:Float,y0:Float,cx:Float,cy:Float,x1:Float,y1:Float,k:Float):Path=Path().apply{
             moveTo(x0*k,y0*k)
             quadraticBezierTo(cx*k,cy*k,x1*k,y1*k)
           }
 
-          /** Glow track, bright core and particles along the path. Strength grows with watts (full scale 3 kW). */
+          /** Thin glow track, fine core and small particles along the path. Strength grows with watts (full scale 3 kW). */
           private fun DrawScope.flowLine(p:Path,col:Color,on:Boolean,watts:Double,t:Float,k:Float){
             if(!on){
-              drawPath(p,col.copy(alpha=0.10f),style=Stroke(3f*k,cap=StrokeCap.Round))
+              drawPath(p,col.copy(alpha=0.10f),style=Stroke(2f*k,cap=StrokeCap.Round))
               return
             }
             val s=(watts/3000.0).toFloat().coerceIn(0f,1f)
-            drawPath(p,col.copy(alpha=0.18f+0.22f*s),style=Stroke((9f+9f*s)*k,cap=StrokeCap.Round))
-            drawPath(p,col.copy(alpha=0.95f),style=Stroke((1.8f+2.2f*s)*k,cap=StrokeCap.Round))
+            drawPath(p,col.copy(alpha=0.15f+0.2f*s),style=Stroke((4f+4f*s)*k,cap=StrokeCap.Round))
+            drawPath(p,col.copy(alpha=0.9f),style=Stroke((1f+1.2f*s)*k,cap=StrokeCap.Round))
             val pm=PathMeasure(p.asAndroidPath(),false)
             val len=pm.length
             if(len<=0f) return
@@ -2476,8 +2481,8 @@ jobs:
             for(i in 0 until n){
               val f=((t*speed)+i.toFloat()/n)%1f
               pm.getPosTan(f*len,pos,null)
-              drawCircle(col,radius=(5f+3f*s)*k,center=Offset(pos[0],pos[1]),alpha=0.3f)
-              drawCircle(Color.White,radius=(1.8f+1f*s)*k,center=Offset(pos[0],pos[1]))
+              drawCircle(col,radius=(3f+2f*s)*k,center=Offset(pos[0],pos[1]),alpha=0.3f)
+              drawCircle(Color.White,radius=(1.1f+0.7f*s)*k,center=Offset(pos[0],pos[1]))
             }
           }
 
@@ -2486,28 +2491,29 @@ jobs:
             Box(Modifier.offset(k*px,k*py).size(k*w,k*h)) { content() }
           }
 
-          /** Compact frosted glass card: dark translucent fill, gradient edge in the accent colour. */
+          /** Glass card that fades into the scene: the fill is strongest at the centre and transparent at the edges, and the edge has no hard outline. */
           @Composable private fun GlassCard(ic:Path,col:Color,label:String,value:String,sub:String,extra:String=""){
+            val shadow=Shadow(color=Color(0xCC000000),blurRadius=6f)
             Row(
               Modifier.fillMaxSize()
-                .clip(RoundedCornerShape(14.dp))
-                .background(Brush.verticalGradient(listOf(Color(0x66121B26),Color(0xD9080D14))))
-                .border(1.dp,Brush.linearGradient(listOf(col,Color(0x33FFFFFF))),RoundedCornerShape(14.dp))
-                .padding(horizontal=10.dp,vertical=5.dp),
-              horizontalArrangement=Arrangement.spacedBy(8.dp),
+                .clip(RoundedCornerShape(12.dp))
+                .background(Brush.radialGradient(listOf(SceneBg.copy(alpha=0.78f),SceneBg.copy(alpha=0.0f))))
+                .border(0.5.dp,Brush.linearGradient(listOf(col.copy(alpha=0.45f),Color.Transparent)),RoundedCornerShape(12.dp))
+                .padding(horizontal=8.dp,vertical=4.dp),
+              horizontalArrangement=Arrangement.spacedBy(6.dp),
               verticalAlignment=Alignment.CenterVertically
             ){
-              Ico(ic,col,26)
+              Ico(ic,col,22)
               Column(verticalArrangement=Arrangement.Center){
-                Text(label,color=Color.White,fontSize=10.sp,maxLines=1)
-                Text(value,color=Color.White,fontSize=15.sp,fontWeight=FontWeight.Medium,maxLines=1)
-                Text(sub,color=col,fontSize=10.sp,maxLines=1)
-                if(extra.isNotEmpty()) Text(extra,color=Color(0xFFB8C4D4),fontSize=10.sp,maxLines=1)
+                Text(label,color=Color.White,fontSize=9.sp,maxLines=1,style=TextStyle(shadow=shadow))
+                Text(value,color=Color.White,fontSize=13.sp,fontWeight=FontWeight.Medium,maxLines=1,style=TextStyle(shadow=shadow))
+                Text(sub,color=col,fontSize=9.sp,maxLines=1,style=TextStyle(shadow=shadow))
+                if(extra.isNotEmpty()) Text(extra,color=Color(0xFFD0DAE6),fontSize=9.sp,maxLines=1,style=TextStyle(shadow=shadow))
               }
             }
           }
 
-          /** Sky scene: the 3D villa (WebView, bundled in assets/villa) with live weather, under glass cards, glowing hub and animated power flows. */
+          /** Sky scene: the 3D villa (WebView, bundled in assets/villa) with live weather, faded glass cards with every reading, a small hub and thin animated power flows. */
           @Composable fun SkyScene(x:Lux,rt:String){
             val ctx=LocalContext.current
             val sp=ctx.getSharedPreferences("c",0)
@@ -2553,31 +2559,31 @@ jobs:
               AndroidView(factory={web},modifier=Modifier.matchParentSize())
               Canvas(Modifier.matchParentSize()){
                 val k=size.width/360f
-                // Power flows (design units: hub centre 180,108 radius 26)
-                flowLine(quad(140f,45f,158f,48f,162f,90f,k),AMBER,x.pv>20,x.pv.toDouble(),tSec,k)
-                if(x.gridOut>20) flowLine(quad(162f,126f,156f,140f,140f,143f,k),gridCol,true,x.gridOut.toDouble(),tSec,k)
-                else flowLine(quad(140f,143f,156f,140f,162f,126f,k),gridCol,x.gridIn>20,x.gridIn.toDouble(),tSec,k)
-                flowLine(quad(198f,90f,210f,80f,220f,73f,k),GREEN,x.load>20,x.load.toDouble(),tSec,k)
-                if(x.discharge>20) flowLine(quad(180f,186f,180f,160f,180f,134f,k),GREEN,true,x.discharge.toDouble(),tSec,k)
-                else flowLine(quad(180f,134f,180f,160f,180f,186f,k),GREEN,x.charge>20,x.charge.toDouble(),tSec,k)
+                // Thin power flows (design units: hub centre 180,108 radius 20)
+                flowLine(quad(128f,40f,152f,46f,166f,94f,k),AMBER,x.pv>20,x.pv.toDouble(),tSec,k)
+                if(x.gridOut>20) flowLine(quad(166f,122f,150f,130f,128f,132f,k),gridCol,true,x.gridOut.toDouble(),tSec,k)
+                else flowLine(quad(128f,132f,150f,130f,166f,122f,k),gridCol,x.gridIn>20,x.gridIn.toDouble(),tSec,k)
+                flowLine(quad(194f,94f,214f,80f,232f,66f,k),GREEN,x.load>20,x.load.toDouble(),tSec,k)
+                if(x.discharge>20) flowLine(quad(180f,184f,180f,156f,180f,128f,k),GREEN,true,x.discharge.toDouble(),tSec,k)
+                else flowLine(quad(180f,128f,180f,156f,180f,184f,k),GREEN,x.charge>20,x.charge.toDouble(),tSec,k)
 
-                // Glowing hub with house icon
+                // Small glowing hub with house icon
                 val hub=Offset(180f*k,108f*k)
                 val pulse=0.5f+0.5f*sin(tSec*2.2f)
-                drawCircle(GREEN,radius=34f*k,center=hub,alpha=0.14f+0.12f*pulse)
-                drawCircle(Color(0xFF0C131B),radius=26f*k,center=hub,alpha=0.92f)
-                drawCircle(GREEN,radius=26f*k,center=hub,style=Stroke(2.2f*k),alpha=0.9f)
-                icon(I_HOME,Color.White,hub,28f*k,false)
+                drawCircle(GREEN,radius=26f*k,center=hub,alpha=0.12f+0.10f*pulse)
+                drawCircle(SceneBg,radius=20f*k,center=hub,alpha=0.85f)
+                drawCircle(GREEN,radius=20f*k,center=hub,style=Stroke(1.6f*k),alpha=0.85f)
+                icon(I_HOME,Color.White,hub,20f*k,false)
 
                 // Weather, top right
-                label(tm,wxLabel(code),236f*k,12f*k,11f*k,Color.White,bold=true)
+                label(tm,wxLabel(code),236f*k,12f*k,10f*k,Color.White,bold=true)
               }
               BoxWithConstraints(Modifier.matchParentSize()){
                 val k=maxWidth/360f
-                Pos(k,4f,10f,136f,70f){ GlassCard(I_SOL,AMBER,"Solar","%,d W".format(x.pv),"$solarPct%  S1 ${x.pv1} · S2 ${x.pv2} · S3 ${x.pv3} W") }
-                Pos(k,220f,40f,136f,66f){ GlassCard(I_HOME,loadCol,"Load","%,d W".format(x.load),"$loadPct% of inverter") }
-                Pos(k,4f,110f,136f,66f){ GlassCard(I_GRID,gridCol,gridLabel,"%,d W".format(gridW),"$gridPct% of home","%.0f V · %.2f Hz".format(x.vGrid,x.fGrid)) }
-                Pos(k,115f,186f,130f,62f){ GlassCard(I_BAT,GREEN,"Battery","${x.soc}%","%.1f V | %.1f A".format(x.vBat,chgA),"$cap kWh") }
+                Pos(k,4f,8f,124f,64f){ GlassCard(I_SOL,AMBER,"Solar","%,d W".format(x.pv),"$solarPct%  S1 ${x.pv1} · S2 ${x.pv2} · S3 ${x.pv3} W") }
+                Pos(k,232f,36f,124f,60f){ GlassCard(I_HOME,loadCol,"Load","%,d W".format(x.load),"$loadPct% of inverter") }
+                Pos(k,4f,100f,124f,64f){ GlassCard(I_GRID,gridCol,gridLabel,"%,d W".format(gridW),"$gridPct% of home","%.0f V · %.2f Hz".format(x.vGrid,x.fGrid)) }
+                Pos(k,116f,186f,128f,62f){ GlassCard(I_BAT,GREEN,"Battery","${x.soc}%","%.1f V | %.1f A".format(x.vBat,chgA),"$cap kWh") }
               }
             }
           }
