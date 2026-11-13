@@ -1880,7 +1880,7 @@ jobs:
 
             var dFrom by remember{mutableStateOf(LocalDate.now().withDayOfMonth(1).toString())}
             var dTo by remember{mutableStateOf(LocalDate.now().toString())}
-            var tab by remember{mutableStateOf(0)}
+            var tab by remember{mutableStateOf(if(sp.getString("landing","live")=="beauty") 1 else 0)}
             var sel by remember{mutableStateOf(0)}
             val ctx=LocalContext.current
             val pick=rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()){ uri->
@@ -2030,8 +2030,12 @@ jobs:
                   }
                   Spacer(Modifier.height(4.dp))
                 } else if(tab==1){
+                  val bx=live?:DEMO[0].second
+                  BeautyView(bx,Store.runtime,LocalConfiguration.current.screenHeightDp.dp*0.78f)
+                } else if(tab==2){
                   ExtrasTab(sp){wall=true}
                 } else {
+                  LandingCard(sp)
                   AppearanceCard(sp)
                   IconPackCard(sp)
                   PrefField(sp,"brand","Brand shown on the main screen","LuxPower")
@@ -2067,8 +2071,9 @@ jobs:
               }
               Row(Modifier.fillMaxWidth().background(DEEP).navigationBarsPadding()){
                 NavItem("Live",I_LIVE,tab==0,Modifier.weight(1f)){tab=0}
-                NavItem("Extras",I_EXTRA,tab==1,Modifier.weight(1f)){tab=1}
-                NavItem("Settings",I_SET,tab==2,Modifier.weight(1f)){tab=2} }
+                NavItem("Beauty",I_SOL,tab==1,Modifier.weight(1f)){tab=1}
+                NavItem("Extras",I_EXTRA,tab==2,Modifier.weight(1f)){tab=2}
+                NavItem("Settings",I_SET,tab==3,Modifier.weight(1f)){tab=3} }
             }
             if(wall) WallScreen(Store.d?:DEMO[0].second,Store.runtime){wall=false}
             }
@@ -2395,6 +2400,13 @@ jobs:
           cat > app/src/main/java/com/lux/monitor/Scene.kt <<'EOF'
           package com.lux.monitor
 
+          import androidx.compose.foundation.clickable
+          import androidx.compose.material3.Button
+          import androidx.compose.material3.ButtonDefaults
+          import androidx.compose.material3.Card
+          import androidx.compose.material3.CardDefaults
+          import kotlin.math.hypot
+
           import android.content.SharedPreferences
           import android.graphics.PathMeasure
           import android.webkit.WebView
@@ -2584,6 +2596,140 @@ jobs:
                 Pos(k,232f,36f,124f,60f){ GlassCard(I_HOME,loadCol,"Load","%,d W".format(x.load),"$loadPct% of inverter") }
                 Pos(k,4f,100f,124f,64f){ GlassCard(I_GRID,gridCol,gridLabel,"%,d W".format(gridW),"$gridPct% of home","%.0f V · %.2f Hz".format(x.vGrid,x.fGrid)) }
                 Pos(k,116f,186f,128f,62f){ GlassCard(I_BAT,GREEN,"Battery","${x.soc}%","%.1f V | %.1f A".format(x.vBat,chgA),"$cap kWh") }
+              }
+            }
+          }
+
+          /** Straight-to-curve helper: quadratic path from a to b with control point c. */
+          private fun qp(a:Offset,c:Offset,b:Offset):Path=Path().apply{
+            moveTo(a.x,a.y)
+            quadraticBezierTo(c.x,c.y,b.x,b.y)
+          }
+
+          /** Round value chip for the Beauty view. Tap to open the full card. */
+          @Composable private fun Chip(ic:Path,col:Color,value:String,modifier:Modifier,onClick:()->Unit){
+            Row(
+              modifier.clip(RoundedCornerShape(20.dp))
+                .background(SceneBg.copy(alpha=0.72f))
+                .clickable(onClick=onClick)
+                .padding(horizontal=10.dp,vertical=6.dp),
+              verticalAlignment=Alignment.CenterVertically,
+              horizontalArrangement=Arrangement.spacedBy(6.dp)
+            ){
+              Ico(ic,col,20)
+              Text(value,color=Color.White,fontSize=14.sp,fontWeight=FontWeight.Medium,maxLines=1)
+            }
+          }
+
+          /** Beauty view: full-height 3D villa with touch on, animated power flows to the hub, value chips at the corners and a detail card on tap. */
+          @Composable fun BeautyView(x:Lux,rt:String,height:Dp){
+            val ctx=LocalContext.current
+            val sp=ctx.getSharedPreferences("c",0)
+            var loaded by remember{ mutableStateOf(false) }
+            var tSec by remember{ mutableStateOf(0f) }
+            var sel by remember{ mutableStateOf("") }
+            LaunchedEffect(Unit){
+              var last=0L
+              while(true){ withFrameNanos{ n -> if(last!=0L) tSec+=(n-last)/1e9f; last=n } }
+            }
+            val q=sp.getString("villaQ","med")!!
+            val web=remember(q){
+              WebView(ctx).apply{
+                setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                settings.javaScriptEnabled=true
+                settings.domStorageEnabled=true
+                webViewClient=object:WebViewClient(){
+                  override fun onPageFinished(view:WebView?,url:String?){ loaded=true }
+                }
+                // ui=0 hides the built-in panel; touch stays on so the villa can be orbited
+                loadUrl("file:///android_asset/villa/index.html?q=$q&ui=0")
+              }
+            }
+            DisposableEffect(web){ onDispose{ web.destroy() } }
+
+            val w=WxState.data; val code=w?.code?:0; val cloud=w?.cloud?:10
+            LaunchedEffect(loaded,code,cloud){
+              if(loaded) web.evaluateJavascript("LuxScene.update({live:true,weather:\"${weatherKey(code)}\",cloudCover:$cloud})",null)
+            }
+
+            val cap=sp.getString("c","15.36")!!
+            val solarPct=(x.pv*100/11500).coerceIn(0,100)
+            val loadPct=(x.load*100/11500).coerceIn(0,100)
+            val gridPct=if(x.load>0) (x.gridIn*100/x.load).coerceIn(0,100) else 0
+            val gridW=if(x.gridOut>20) x.gridOut else x.gridIn
+            val gridLabel=if(x.gridOut>20) "Export" else "Grid"
+            val chgA=if(x.vBat>0.0) (x.charge-x.discharge)/x.vBat else 0.0
+            val gridCol=Color(0xFFE5E7EB)
+            val loadCol=Color(0xFF38BDF8)
+
+            Box(Modifier.fillMaxWidth().height(height)){
+              AndroidView(factory={web},modifier=Modifier.matchParentSize())
+              Canvas(Modifier.matchParentSize()){
+                val W=size.width; val H=size.height; val k=W/360f
+                val hub=Offset(0.5f*W,0.46f*H)
+                val hr=minOf(W,H)*0.06f
+                fun toward(a:Offset):Offset{
+                  val dx=a.x-hub.x; val dy=a.y-hub.y
+                  val d=hypot(dx,dy).coerceAtLeast(1f)
+                  return Offset(hub.x+dx/d*hr,hub.y+dy/d*hr)
+                }
+                val sS=Offset(0.26f*W,0.2f*H); val sG=Offset(0.26f*W,0.8f*H)
+                val sL=Offset(0.74f*W,0.2f*H); val sB=Offset(0.74f*W,0.8f*H)
+                flowLine(qp(sS,Offset(0.36f*W,0.3f*H),toward(sS)),AMBER,x.pv>20,x.pv.toDouble(),tSec,k)
+                if(x.gridOut>20) flowLine(qp(toward(sG),Offset(0.36f*W,0.7f*H),sG),gridCol,true,x.gridOut.toDouble(),tSec,k)
+                else flowLine(qp(sG,Offset(0.36f*W,0.7f*H),toward(sG)),gridCol,x.gridIn>20,x.gridIn.toDouble(),tSec,k)
+                flowLine(qp(toward(sL),Offset(0.64f*W,0.3f*H),sL),GREEN,x.load>20,x.load.toDouble(),tSec,k)
+                if(x.discharge>20) flowLine(qp(sB,Offset(0.6f*W,0.72f*H),toward(sB)),GREEN,true,x.discharge.toDouble(),tSec,k)
+                else flowLine(qp(toward(sB),Offset(0.6f*W,0.72f*H),sB),GREEN,x.charge>20,x.charge.toDouble(),tSec,k)
+
+                val pulse=0.5f+0.5f*sin(tSec*2.2f)
+                drawCircle(GREEN,radius=hr*1.6f,center=hub,alpha=0.12f+0.10f*pulse)
+                drawCircle(SceneBg,radius=hr,center=hub,alpha=0.85f)
+                drawCircle(GREEN,radius=hr,center=hub,style=Stroke(1.6f*k),alpha=0.85f)
+                icon(I_HOME,Color.White,hub,hr*1.3f,false)
+              }
+              Text(wxLabel(code),color=Color.White,fontSize=12.sp,fontWeight=FontWeight.Medium,
+                style=TextStyle(shadow=Shadow(color=Color(0xCC000000),blurRadius=6f)),
+                modifier=Modifier.align(Alignment.TopCenter).padding(top=14.dp))
+              Chip(I_SOL,AMBER,"%,d W".format(x.pv),Modifier.align(Alignment.TopStart).padding(start=12.dp,top=48.dp)){ sel="solar" }
+              Chip(I_HOME,loadCol,"%,d W".format(x.load),Modifier.align(Alignment.TopEnd).padding(end=12.dp,top=48.dp)){ sel="load" }
+              Chip(I_GRID,gridCol,"%,d W".format(gridW),Modifier.align(Alignment.BottomStart).padding(start=12.dp,bottom=12.dp)){ sel="grid" }
+              Chip(I_BAT,GREEN,"${x.soc}%",Modifier.align(Alignment.BottomEnd).padding(end=12.dp,bottom=12.dp)){ sel="bat" }
+              if(sel.isNotEmpty()){
+                Box(Modifier.matchParentSize().clickable{ sel="" })
+                Box(Modifier.align(Alignment.Center).size(240.dp,112.dp)){
+                  when(sel){
+                    "solar"->GlassCard(I_SOL,AMBER,"Solar","%,d W".format(x.pv),"S1 ${x.pv1} · S2 ${x.pv2} · S3 ${x.pv3} W","$solarPct% of inverter")
+                    "load"->GlassCard(I_HOME,loadCol,"Load","%,d W".format(x.load),"$loadPct% of inverter")
+                    "grid"->GlassCard(I_GRID,gridCol,gridLabel,"%,d W".format(gridW),"$gridPct% of home","%.0f V · %.2f Hz".format(x.vGrid,x.fGrid))
+                    else->GlassCard(I_BAT,GREEN,"Battery","${x.soc}%","%.1f V | %.1f A".format(x.vBat,chgA),"$cap kWh")
+                  }
+                }
+              }
+            }
+          }
+
+          /** Settings card: choose the opening screen (Live or Beauty) and the Beauty render quality. */
+          @Composable fun LandingCard(sp:SharedPreferences){
+            var landing by remember{ mutableStateOf(sp.getString("landing","live")!!) }
+            var vq by remember{ mutableStateOf(sp.getString("villaQ","med")!!) }
+            Card(Modifier.fillMaxWidth(),shape=RoundedCornerShape(14.dp),colors=CardDefaults.cardColors(containerColor=CARD)){
+              Column(Modifier.padding(12.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){
+                Text("Opening screen",fontSize=13.sp,fontWeight=FontWeight.SemiBold,color=WHITE)
+                Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(6.dp)){
+                  listOf("live" to "Live","beauty" to "Beauty").forEach{ (v,t)->
+                    Button({ landing=v; sp.edit().putString("landing",v).apply() },Modifier.weight(1f),
+                      colors=ButtonDefaults.buttonColors(containerColor=if(landing==v) CYAN else TILE,contentColor=if(landing==v) Color.Black else WHITE)){ Text(t,fontSize=12.sp) }
+                  }
+                }
+                Text("Beauty quality",fontSize=13.sp,fontWeight=FontWeight.SemiBold,color=WHITE,modifier=Modifier.padding(top=4.dp))
+                Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(6.dp)){
+                  listOf("low" to "Battery saver","med" to "Medium","high" to "High").forEach{ (v,t)->
+                    Button({ vq=v; sp.edit().putString("villaQ",v).apply() },Modifier.weight(1f),
+                      colors=ButtonDefaults.buttonColors(containerColor=if(vq==v) CYAN else TILE,contentColor=if(vq==v) Color.Black else WHITE)){ Text(t,fontSize=11.sp) }
+                  }
+                }
+                Text("Battery saver uses the low-power render and pauses nothing else. Quality applies the next time the screen opens.",fontSize=11.sp,color=DIM)
               }
             }
           }
